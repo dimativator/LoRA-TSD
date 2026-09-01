@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments and local secrets
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store
+
+# Experiment artifacts
+results/
+checkpoints/
+wandb/
+logs/
+*.log
+
+# Local model and dataset caches
+.cache/
+huggingface/
+
