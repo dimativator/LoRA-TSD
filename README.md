@@ -1,5 +1,10 @@
 # LoRA-TSD
 
+[![arXiv](https://img.shields.io/badge/arXiv-2609.02734-b31b1b.svg)](https://arxiv.org/abs/2609.02734)
+
+This is the official repository for the paper
+[LoRA-TSD: Tangent-Space Spectral Descent for LoRA via Muon-Style Updates](https://arxiv.org/abs/2609.02734).
+
 This package contains LoRA-TSD, the comparison optimizers used in the paper,
 and the scripts needed to reproduce the main experiments and ablations. Models
 and datasets are loaded from Hugging Face. Results are written to local JSON
