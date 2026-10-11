@@ -1,10 +1,11 @@
 """Print compact summaries from the persistent SIQA log directory."""
 
 import json
+import os
 from collections import deque
 from pathlib import Path
 
-root = Path("/home/jovyan/lora-siqa-retractions-20261011")
+root = Path(os.environ.get("LORA_SIQA_LOG_ROOT", "/home/jovyan/lora-siqa-retractions-20261011"))
 for path in sorted(root.glob("*/run.json")):
     if (path.parent / "metrics.json").exists():
         continue
@@ -20,6 +21,7 @@ for path in sorted(root.glob("*/run.json")):
         with log_path.open() as stream:
             tail = list(deque(stream, maxlen=3))
     print("SIQA_PROGRESS " + json.dumps({"name": state["name"], "returncode": state.get("returncode"),
+                                         "eval_every": state["command"][state["command"].index("--eval-every") + 1],
                                          "recent_metrics": recent, "log_tail": tail}), flush=True)
 for path in sorted(root.glob("*/metrics.json")):
     metrics = json.loads(path.read_text())
