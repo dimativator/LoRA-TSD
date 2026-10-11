@@ -4,6 +4,7 @@ import json
 import os
 import math
 import shutil
+import subprocess
 from collections import deque
 from pathlib import Path
 
@@ -50,3 +51,7 @@ print("SIQA_CHECKPOINT_COUNT " + str(len(list(root.rglob("*.pt")))))
 
 disk = shutil.disk_usage(root)
 print("SIQA_DISK " + json.dumps({"free_bytes": disk.free, "total_bytes": disk.total}))
+
+for directory in [root, Path("/home/jovyan/lora-siqa-data"), Path("/home/jovyan/.cache/huggingface")]:
+    result = subprocess.run(["du", "-sk", str(directory)], capture_output=True, text=True, timeout=30)
+    print("SIQA_STORAGE " + json.dumps({"path": str(directory), "du": result.stdout.strip(), "returncode": result.returncode}))
