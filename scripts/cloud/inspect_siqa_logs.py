@@ -2,6 +2,8 @@
 
 import json
 import os
+import math
+import shutil
 from collections import deque
 from pathlib import Path
 
@@ -15,6 +17,19 @@ for path in sorted(root.glob("*/run.json")):
     if history_path.exists():
         with history_path.open() as stream:
             recent = [json.loads(line) for line in deque(stream, maxlen=2)]
+    validation = []
+    nonfinite_steps = []
+    if history_path.exists():
+        with history_path.open() as stream:
+            for line in stream:
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue  # The worker may still be writing the last record.
+                if "validation_score" in row:
+                    validation.append(row)
+                if "train/loss" in row and not math.isfinite(row["train/loss"]):
+                    nonfinite_steps.append(row.get("step"))
     log_path = path.parent / "train.log"
     tail = []
     if log_path.exists():
@@ -22,7 +37,8 @@ for path in sorted(root.glob("*/run.json")):
             tail = list(deque(stream, maxlen=3))
     print("SIQA_PROGRESS " + json.dumps({"name": state["name"], "returncode": state.get("returncode"),
                                          "eval_every": state["command"][state["command"].index("--eval-every") + 1],
-                                         "recent_metrics": recent, "log_tail": tail}), flush=True)
+                                         "recent_metrics": recent, "validation": validation,
+                                         "nonfinite_steps": nonfinite_steps, "log_tail": tail}), flush=True)
 for path in sorted(root.glob("*/metrics.json")):
     metrics = json.loads(path.read_text())
     history_path = path.parent / "history.jsonl"
@@ -31,3 +47,6 @@ for path in sorted(root.glob("*/metrics.json")):
     metrics["last_losses"] = [r["train/loss"] for r in rows if "train/loss" in r][-5:]
     print("SIQA_METRICS " + json.dumps(metrics), flush=True)
 print("SIQA_CHECKPOINT_COUNT " + str(len(list(root.rglob("*.pt")))))
+
+disk = shutil.disk_usage(root)
+print("SIQA_DISK " + json.dumps({"free_bytes": disk.free, "total_bytes": disk.total}))
