@@ -24,7 +24,17 @@ if os.environ.get("LORA_SIQA_RESERVE_HANDOFF") == "1":
             if state_path.exists():
                 previous = json.loads(state_path.read_text())
                 if previous["command"] != reservation["command"]:
-                    raise ValueError("Handoff boundary already has a different command")
+                    normalized = [word.replace("/System/Volumes/Data/home/", "/home/")
+                                  for word in previous["command"]]
+                    untouched = not any((directory / name).exists()
+                                        for name in ["metrics.json", "history.jsonl", "train.log"])
+                    if not previous.get("reservation") or not untouched or normalized != reservation["command"]:
+                        raise ValueError("Handoff boundary already has a different command")
+                    backup = directory / "run.before_linux_path_fix.json"
+                    if not backup.exists():
+                        backup.write_text(state_path.read_text())
+                    state_path.write_text(json.dumps(reservation, indent=2) + "\n")
+                    print("SIQA_HANDOFF repaired macOS reservation paths for Linux", flush=True)
                 print("SIQA_HANDOFF reservation already present", flush=True)
             else:
                 state_path.write_text(json.dumps(reservation, indent=2) + "\n")
