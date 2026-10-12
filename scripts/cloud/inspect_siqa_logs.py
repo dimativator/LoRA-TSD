@@ -1,6 +1,7 @@
 """Print compact summaries from the persistent SIQA log directory."""
 
 import json
+import fcntl
 import os
 import math
 import shutil
@@ -9,6 +10,25 @@ from collections import deque
 from pathlib import Path
 
 root = Path(os.environ.get("LORA_SIQA_LOG_ROOT", "/home/jovyan/lora-siqa-retractions-20261011"))
+if os.environ.get("LORA_SIQA_RESERVE_HANDOFF") == "1":
+    reservation = json.loads(Path(__file__).with_name("siqa_handoff.json").read_text())
+    directory = root / reservation["name"]
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / "worker.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("SIQA_HANDOFF already claimed by worker", flush=True)
+        else:
+            state_path = directory / "run.json"
+            if state_path.exists():
+                previous = json.loads(state_path.read_text())
+                if previous["command"] != reservation["command"]:
+                    raise ValueError("Handoff boundary already has a different command")
+                print("SIQA_HANDOFF reservation already present", flush=True)
+            else:
+                state_path.write_text(json.dumps(reservation, indent=2) + "\n")
+                print("SIQA_HANDOFF reserved next run for parallel workers", flush=True)
 for path in sorted(root.glob("*/run.json")):
     if (path.parent / "metrics.json").exists():
         continue
