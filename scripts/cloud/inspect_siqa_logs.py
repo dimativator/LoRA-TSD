@@ -10,6 +10,7 @@ from collections import deque
 from pathlib import Path
 
 root = Path(os.environ.get("LORA_SIQA_LOG_ROOT", "/home/jovyan/lora-siqa-retractions-20261011"))
+root.mkdir(parents=True, exist_ok=True)
 if os.environ.get("LORA_SIQA_RESERVE_HANDOFF") == "1":
     reservation = json.loads(Path(__file__).with_name("siqa_handoff.json").read_text())
     directory = root / reservation["name"]
