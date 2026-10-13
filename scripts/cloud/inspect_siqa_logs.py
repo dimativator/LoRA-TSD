@@ -76,6 +76,16 @@ for path in sorted(root.glob("*/metrics.json")):
     rows = [json.loads(line) for line in history_path.read_text().splitlines()] if history_path.exists() else []
     metrics["cuda_peak_allocated_bytes"] = max((r.get("cuda_peak_allocated_bytes", 0) for r in rows), default=0)
     metrics["last_losses"] = [r["train/loss"] for r in rows if "train/loss" in r][-5:]
+    state = json.loads((path.parent / "run.json").read_text())
+    losses = [r for r in rows if "train/loss" in r]
+    metrics["verification"] = {
+        "returncode": state.get("returncode"),
+        "command": state["command"],
+        "train_record_count": len(losses),
+        "last_train_step": max((r["step"] for r in losses), default=None),
+        "nonfinite_train_steps": [r["step"] for r in losses if not math.isfinite(r["train/loss"])],
+        "validation": [r for r in rows if "validation_score" in r],
+    }
     print("SIQA_METRICS " + json.dumps(metrics), flush=True)
 print("SIQA_CHECKPOINT_COUNT " + str(len(list(root.rglob("*.pt")))))
 
