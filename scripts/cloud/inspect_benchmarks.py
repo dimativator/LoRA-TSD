@@ -61,6 +61,23 @@ for path in sorted(root.glob("*/metrics.json")):
     print("BENCHMARK_METRICS " + json.dumps(metrics), flush=True)
 print("BENCHMARK_CHECKPOINT_COUNT " + str(len(list(root.rglob("*.pt")))))
 
+# Only caches generated from this campaign's own private parquet paths qualify.
+data_root = Path('/home/jovyan/lora-1b-benchmark-data-20261014')
+cache_root = Path(os.environ.get('HF_HOME', '/home/jovyan/.cache/huggingface')) / 'datasets/parquet'
+removed_cache_bytes = 0
+if os.environ.get('LORA_BENCHMARK_CLEANUP_ARROW') == '1':
+    for info_path in cache_root.glob('**/dataset_info.json'):
+        metadata = json.loads(info_path.read_text())
+        sources = list((metadata.get('download_checksums') or {}).keys())
+        if not sources or not all(source.startswith(str(data_root) + '/') and source.endswith('.parquet') for source in sources):
+            continue
+        directory = info_path.parent
+        if not directory.resolve().is_relative_to(cache_root.resolve()):
+            raise ValueError('Unexpected cache path')
+        removed_cache_bytes += sum(path.stat().st_size for path in directory.rglob('*') if path.is_file())
+        shutil.rmtree(directory)
+    print('BENCHMARK_OWN_ARROW_CACHE_REMOVED_BYTES ' + str(removed_cache_bytes), flush=True)
+
 disk = shutil.disk_usage(root)
 print("BENCHMARK_DISK " + json.dumps({"free_bytes": disk.free, "total_bytes": disk.total}))
 
