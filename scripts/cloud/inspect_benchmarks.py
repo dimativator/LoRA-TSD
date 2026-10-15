@@ -50,13 +50,22 @@ for path in sorted(root.glob("*/metrics.json")):
     metrics["last_losses"] = [r["train/loss"] for r in rows if "train/loss" in r][-5:]
     state = json.loads((path.parent / "run.json").read_text())
     losses = [r for r in rows if "train/loss" in r]
+    fallback_rows = [r for r in losses if r.get("train/retraction_fallback_layers", 0)]
+    lr_rows = [r for r in losses if "lr_A" in r]
     metrics["verification"] = {
         "returncode": state.get("returncode"),
         "command": state["command"],
         "train_record_count": len(losses),
+        "train_steps": [r["step"] for r in losses],
         "last_train_step": max((r["step"] for r in losses), default=None),
         "nonfinite_train_steps": [r["step"] for r in losses if not math.isfinite(r["train/loss"])],
         "validation": [r for r in rows if "validation_score" in r],
+        "retraction_fallbacks": {
+            "record_count": sum("train/retraction_fallback_layers" in r for r in losses),
+            "total_layer_events": sum(r["train/retraction_fallback_layers"] for r in fallback_rows),
+            "steps": [{"step": r["step"], "layers": r["train/retraction_fallback_layers"]} for r in fallback_rows],
+        },
+        "lr_history": [{"step": r["step"], "lr_A": r["lr_A"]} for r in lr_rows],
     }
     print("BENCHMARK_METRICS " + json.dumps(metrics), flush=True)
 print("BENCHMARK_CHECKPOINT_COUNT " + str(len(list(root.rglob("*.pt")))))
