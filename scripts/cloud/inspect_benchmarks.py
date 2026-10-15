@@ -52,11 +52,28 @@ for path in sorted(root.glob("*/metrics.json")):
     losses = [r for r in rows if "train/loss" in r]
     fallback_rows = [r for r in losses if r.get("train/retraction_fallback_layers", 0)]
     lr_rows = [r for r in losses if "lr_A" in r]
+    train_steps = [r["step"] for r in losses]
+    command = state["command"]
+    lr_check = None
+    if "--lr-scheduler" in command and command[command.index("--lr-scheduler") + 1] == "linear":
+        total_steps = int(command[command.index("--steps") + 1])
+        base_lr = float(command[command.index("--lr-a") + 1])
+        min_lr = float(command[command.index("--min-lr") + 1]) if "--min-lr" in command else 0.0
+        warmup_steps = max(1, round(0.1 * total_steps))
+        mismatches = []
+        for row in lr_rows:
+            next_step = min(row["step"] + 1, total_steps)
+            expected = base_lr * next_step / warmup_steps if next_step <= warmup_steps else base_lr + (min_lr - base_lr) * (next_step - warmup_steps) / max(1, total_steps - warmup_steps)
+            if not math.isclose(row["lr_A"], expected, rel_tol=1e-9, abs_tol=1e-12):
+                mismatches.append(row["step"])
+        lr_check = {"record_count": len(lr_rows), "mismatch_count": len(mismatches), "first_mismatch_steps": mismatches[:10],
+                    "warmup_steps": warmup_steps, "logged_lr_is_next_update": True,
+                    "samples": [{"step": r["step"], "lr_A": r["lr_A"]} for r in lr_rows if r["step"] in {1, warmup_steps - 1, warmup_steps, total_steps - 1, total_steps}]}
     metrics["verification"] = {
         "returncode": state.get("returncode"),
         "command": state["command"],
         "train_record_count": len(losses),
-        "train_steps": [r["step"] for r in losses],
+        "train_steps_contiguous": train_steps == list(range(1, len(losses) + 1)),
         "last_train_step": max((r["step"] for r in losses), default=None),
         "nonfinite_train_steps": [r["step"] for r in losses if not math.isfinite(r["train/loss"])],
         "validation": [r for r in rows if "validation_score" in r],
@@ -65,7 +82,7 @@ for path in sorted(root.glob("*/metrics.json")):
             "total_layer_events": sum(r["train/retraction_fallback_layers"] for r in fallback_rows),
             "steps": [{"step": r["step"], "layers": r["train/retraction_fallback_layers"]} for r in fallback_rows],
         },
-        "lr_history": [{"step": r["step"], "lr_A": r["lr_A"]} for r in lr_rows],
+        "lr_check": lr_check,
     }
     print("BENCHMARK_METRICS " + json.dumps(metrics), flush=True)
 print("BENCHMARK_CHECKPOINT_COUNT " + str(len(list(root.rglob("*.pt")))))
