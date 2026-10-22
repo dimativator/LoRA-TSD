@@ -126,7 +126,7 @@ class MultiNLISFTCollator:
 
 
 def get_train_dataloader(tokenizer, config):
-    ds = load_dataset("nyu-mll/multi_nli")["train"]
+    ds = load_dataset("nyu-mll/multi_nli", split="train")
     ds = ds.filter(lambda ex: int(ex["label"]) != -1)
 
     collator = MultiNLISFTCollator(
@@ -181,7 +181,7 @@ class MultiNLIEval(BaseLogprobEval):
         self.dataset_label = f"MultiNLI/{split}"
 
     def load_eval_dataset(self):
-        ds = load_dataset("nyu-mll/multi_nli")[self.split]
+        ds = load_dataset("nyu-mll/multi_nli", split=self.split)
         return ds.filter(lambda ex: int(ex["label"]) != -1)
 
     def example_to_prompt_gold_choices(self, ex, use_chat_template: bool):

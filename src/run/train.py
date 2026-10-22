@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import torch
 from tqdm import tqdm
 
@@ -13,10 +16,10 @@ def _optimizer_parameters(optimizer):
     ]
 
 
-def train(config, model, optimizer, dataloader, tokenizer, evaluate):
+def train(config, model, optimizer, dataloader, tokenizer, evaluate, optimizer_lr_scheduler=None):
     model.train()
     optimizer.zero_grad()
-    resume_state = load_training_checkpoint(config, model, optimizer)
+    resume_state = load_training_checkpoint(config, model, optimizer, optimizer_lr_scheduler)
     losses = list(resume_state.get("losses", [])) if resume_state else []
     validation_scores = (
         list(resume_state.get("validation_scores", [])) if resume_state else []
@@ -78,7 +81,12 @@ def train(config, model, optimizer, dataloader, tokenizer, evaluate):
                     config["grad_clip_norm"],
                 )
 
+            used_lr = optimizer.param_groups[0].get("lr", optimizer.param_groups[0].get("lr_A"))
             optimizer.step()
+            if optimizer_lr_scheduler is not None:
+                optimizer_lr_scheduler.step()
+            else:
+                used_lr = optimizer.param_groups[0].get("lr", optimizer.param_groups[0].get("lr_A"))
             optimizer.zero_grad()
             micro_batches_since_update = 0
             global_step += 1
@@ -90,7 +98,7 @@ def train(config, model, optimizer, dataloader, tokenizer, evaluate):
             progress.update(1)
             progress.set_postfix(loss=f"{loss_value:.4f}")
 
-            if (global_step - 1) % config["eval_every"] == 0:
+            if global_step % config["eval_every"] == 0 and global_step < config["steps"]:
                 eval_batch_size = config.get("eval_batch_size")
                 if eval_batch_size is None:
                     eval_batch_size = max(config["train_batch_size"] // 4, 1)
@@ -102,6 +110,19 @@ def train(config, model, optimizer, dataloader, tokenizer, evaluate):
                 validation_scores.append({"step": global_step, "accuracy": score})
                 print(f"validation_accuracy={score:.6f} step={global_step}", flush=True)
                 model.train()
+                if config.get("metrics_jsonl"):
+                    path = Path(config["metrics_jsonl"])
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    with path.open("a") as stream:
+                        stream.write(json.dumps({"step": global_step, "validation_score": float(score)}) + "\n")
+
+            if config.get("metrics_jsonl"):
+                path = Path(config["metrics_jsonl"])
+                path.parent.mkdir(parents=True, exist_ok=True)
+                record = {"step": global_step, "train/loss": loss_value, "lr_A_used": used_lr,
+                          "train/retraction_fallback_layers": getattr(optimizer, "last_retraction_fallbacks", 0)}
+                with path.open("a") as stream:
+                    stream.write(json.dumps(record) + "\n")
 
             checkpoint_every = int(config.get("checkpoint_every", 0) or 0)
             if checkpoint_every > 0 and global_step % checkpoint_every == 0:
@@ -115,6 +136,7 @@ def train(config, model, optimizer, dataloader, tokenizer, evaluate):
                     epoch_generator_state=epoch_generator_state,
                     losses=losses,
                     validation_scores=validation_scores,
+                    optimizer_lr_scheduler=optimizer_lr_scheduler,
                 )
 
         epoch += 1
@@ -133,5 +155,6 @@ def train(config, model, optimizer, dataloader, tokenizer, evaluate):
             epoch_generator_state=last_epoch_generator_state,
             losses=losses,
             validation_scores=validation_scores,
+            optimizer_lr_scheduler=optimizer_lr_scheduler,
         )
     return losses, validation_scores

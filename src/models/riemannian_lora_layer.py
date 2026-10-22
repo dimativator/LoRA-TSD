@@ -20,6 +20,7 @@ class RiemannianLoRALinear(nn.Module):
         out_features, in_features = base_linear.weight.shape
         self.r = r
         self.scaling = lora_alpha / r
+        self.tangent_forward = False
 
         self.base_linear = base_linear
         for p in self.base_linear.parameters():
@@ -55,8 +56,12 @@ class RiemannianLoRALinear(nn.Module):
         B_eff = B_param.T[:self.r, :]
 
         x_f32 = self.lora_dropout(x).float()
-        lora_out = F.linear(x_f32, B_eff)
-        lora_out = F.linear(lora_out, A_eff)
+        if self.tangent_forward:
+            lora_out = F.linear(x_f32, B_param.T)
+            lora_out = F.linear(lora_out, A_param.T)
+        else:
+            lora_out = F.linear(x_f32, B_eff)
+            lora_out = F.linear(lora_out, A_eff)
 
         return base_out + lora_out.to(x.dtype) * self.scaling
 

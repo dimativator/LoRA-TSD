@@ -45,7 +45,7 @@ def _example_to_prompt_and_gold(ex, chat_template: bool = False):
 
 
 def get_train_dataloader(tokenizer, config):
-    train_dataset = load_dataset("ybisk/piqa")["train"]
+    train_dataset = load_dataset("ybisk/piqa", split="train")
 
     collator = GenericSFTCollator(
         tokenizer=tokenizer,
@@ -95,7 +95,7 @@ class PIQAEval(BaseLogprobEval):
     _CHOICES = ["Solution 1", "Solution 2"]
 
     def load_eval_dataset(self):
-        return load_dataset("ybisk/piqa")["validation"]
+        return load_dataset("ybisk/piqa", split="validation")
 
     def example_to_prompt_gold_choices(self, ex, use_chat_template: bool):
         gold = piqa_label_text(ex["label"])

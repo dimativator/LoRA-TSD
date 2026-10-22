@@ -12,10 +12,11 @@ import models
 from args_parser import parse_config
 from data import get_dataset
 from optimizers import build_optimizer, make_linear_warmup_decay
+from optimizers.schedulers import make_torch_linear_warmup_decay
 from run import checkpoint_exists, train
 
 
-RIEMANNIAN_OPTIMIZERS = {"riemannian_sgd", "riemannion"}
+RIEMANNIAN_OPTIMIZERS = {"riemannian_sgd", "riemannion", "riemannion_original"}
 FULL_FINETUNE_OPTIMIZERS = {"muon_full"}
 
 
@@ -81,13 +82,13 @@ def configure_schedules(config) -> None:
         config["lr_A"],
         config["steps"],
         warmup_frac=0.1,
-        min_lr=1e-5,
+        min_lr=config["min_lr"],
     )
     config["lr_B_scheduler"] = make_linear_warmup_decay(
         config["lr_B"],
         config["steps"],
         warmup_frac=0.1,
-        min_lr=1e-5,
+        min_lr=config["min_lr"],
     )
 
 
@@ -120,6 +121,10 @@ def main() -> None:
     config = parse_config()
     set_seed(config["seed"])
     model, tokenizer, parameter_groups = build_model(config)
+    if config["grad_checkpointing"]:
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        model.enable_input_require_grads()
+        model.config.use_cache = False
 
     build_dataloader, evaluate = get_dataset(config["dataset"])
     data_config = {
@@ -128,8 +133,21 @@ def main() -> None:
     }
     dataloader = build_dataloader(tokenizer, data_config)
     initialize_subspace(config, model, dataloader)
+    if config["optimizer"] == "riemannion_original":
+        for module in model.modules():
+            if isinstance(module, models.RiemannianLoRALinear):
+                module.tangent_forward = True
+        # Match the campaign's training RNG after initialization.
+        set_seed(config["seed"])
+        if getattr(dataloader, "generator", None) is not None:
+            dataloader.generator.manual_seed(config["seed"])
     configure_schedules(config)
     optimizer = build_optimizer(parameter_groups, config)
+    optimizer_lr_scheduler = None
+    if config["optimizer"] == "riemannion_original" and config["lr_scheduler"] == "linear":
+        optimizer_lr_scheduler = make_torch_linear_warmup_decay(
+            optimizer, total_steps=config["steps"], min_lr=config["min_lr"],
+        )
 
     started = time.time()
     losses, validation_scores = train(
@@ -139,6 +157,7 @@ def main() -> None:
         dataloader,
         tokenizer,
         evaluate,
+        optimizer_lr_scheduler=optimizer_lr_scheduler,
     )
     elapsed = time.time() - started
 
@@ -151,6 +170,12 @@ def main() -> None:
         config.get("eval_batch_size")
         or max(config["train_batch_size"] // 2, 1),
     )
+
+    if config.get("metrics_jsonl"):
+        path = Path(config["metrics_jsonl"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as stream:
+            stream.write(json.dumps({"step": config["steps"], "validation_score": float(test_accuracy)}) + "\n")
 
     best_validation_accuracy = max(
         (item["accuracy"] for item in validation_scores),
@@ -177,6 +202,14 @@ def main() -> None:
         "seconds_per_step": elapsed / config["steps"],
     }
 
+    measured = validation_scores + [{"step": config["steps"], "accuracy": test_accuracy}]
+    best = max(measured, key=lambda item: item["accuracy"])
+    result.update(
+        reported_accuracy_step=best["step"],
+        retraction=config["retraction"],
+        retraction_gauge=config["retraction_gauge"],
+        retraction_momentum=config["retraction_momentum"],
+    )
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     output_file = output_dir / f"{config['run_name']}.json"

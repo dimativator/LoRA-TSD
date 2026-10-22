@@ -114,7 +114,7 @@ class QNLISFTCollator:
 
 
 def get_train_dataloader(tokenizer, config):
-    train_dataset = load_dataset("SetFit/qnli")["train"]
+    train_dataset = load_dataset("SetFit/qnli", split="train")
 
     collator = QNLISFTCollator(
         tokenizer=tokenizer,
@@ -155,7 +155,7 @@ class QNLIEval(BaseLogprobEval):
     _CHOICES = ["entailment", "not entailment"]
 
     def load_eval_dataset(self):
-        return load_dataset("SetFit/qnli")["validation"]
+        return load_dataset("SetFit/qnli", split="validation")
 
     def example_to_prompt_gold_choices(self, ex, use_chat_template: bool):
         prompt, gold = _example_to_prompt_and_gold(ex)

@@ -5,12 +5,15 @@ from .lora_pro import LoRAPro
 from .lora_rite import LoRARite
 from .muon import Muon
 from .riemannian_lora import RiemannianSGD, Riemannion
+from .riemannion_original import RiemannionOriginal
 from .sgd import LoRASGD
 from .lora_tsd import LoRATSD
 
 
 def build_optimizer(params, config):
     name = config["optimizer"].lower()
+    if config.get("retraction", "native") != "native" and name not in {"lora_tsd", "riemannion", "riemannion_original"}:
+        raise ValueError("Retractions are supported only by LoRA-TSD and Riemannion optimizers.")
 
     if name == "lora_sgd":
         return LoRASGD(
@@ -68,13 +71,15 @@ def build_optimizer(params, config):
             momentum=config["riemannian_momentum"],
         )
 
-    if name == "riemannion":
-        return Riemannion(
+    if name in {"riemannion", "riemannion_original"}:
+        optimizer = RiemannionOriginal if name == "riemannion_original" else Riemannion
+        return optimizer(
             params,
             lr=config["lr_A"],
             momentum=config["riemannian_momentum"],
             nesterov=config["riemannion_nesterov"],
             nuclear_scale=config["riemannion_nuclear_scale"],
+            retraction=config["retraction"],
             weight_decay=config["weight_decay"],
         )
 
@@ -111,6 +116,9 @@ def build_optimizer(params, config):
         return LoRATSD(
             params,
             norm_ord=2,
+            retraction=config["retraction"],
+            retraction_gauge=config["retraction_gauge"],
+            retraction_momentum=config["retraction_momentum"],
             use_momentum=config["use_momentum"],
             momentum_cf=config["momentum_cf"],
             lr_A=config["lr_A"],

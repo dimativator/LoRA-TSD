@@ -89,3 +89,58 @@ Rolling checkpoints are saved atomically every 400 optimizer updates under
 `latest.pt`, including LoRA parameters, optimizer state, RNG state, dataloader
 position, losses, and validation scores. The frozen 32B base weights are not
 duplicated in the checkpoint. Checkpoints are retained after successful runs.
+
+## Development branch
+
+`dev` contains the integrated working version. Use `dev` for new changes. Do not create branches with the `codex/` prefix.
+
+## RiemannionOriginal and retraction ablation
+
+`--optimizer RiemannionOriginal` (alias `riemannion_original`) selects the
+corrected implementation with the authors' tangent gradient, momentum,
+Nesterov convention, polarization and previous-point references. Auxiliary
+forward blocks are enabled after initialization. The older `riemannion`
+optimizer remains available. SVD is the default retraction.
+
+Run the four-retraction SIQA ablation on Llama-3.2-1B-Instruct:
+
+```bash
+bash scripts/retraction_ablation/run.sh
+```
+
+The script runs `factor`, `svd`, `orthographic` and `ksl`, each with seeds
+42, 0 and 1. Settings match the scheduled SIQA campaign: 3000 optimizer
+updates, validation every 300 updates, LR warmup for 300 updates to 3e-5,
+then linear decay to 1e-5, momentum 0.95, rank/alpha 16, microbatch 2 and
+accumulation 16. Gradient checkpointing is enabled. Model checkpoints and
+W&B logging are disabled. At the initial rank-deficient point, non-SVD
+maps use the existing SVD warm start. JSONL logs record fallback counts.
+
+Run a subset, or run LoRA-TSD with the same retraction choices:
+
+```bash
+RETRACTIONS="factor ksl" SEEDS="42" bash scripts/retraction_ablation/run.sh
+METHODS="lora_tsd" bash scripts/retraction_ablation/run.sh
+METHODS="lora_tsd" RETRACTIONS="native" bash scripts/retraction_ablation/run.sh
+bash scripts/main/run_riemannion_original_1b.sh
+```
+
+LoRA-TSD uses LR 5e-3 and projected tangent momentum when comparing
+refactorizing maps. Its `native` control keeps the original factor momentum
+and gauge. These two momentum policies are separate controls. Non-native
+maps with untransported factor momentum are rejected.
+
+The benchmark script selects SVD on BoolQ, PIQA, SIQA, OpenBookQA, QNLI and
+MultiNLI with the same three seeds. Dataset loaders request only the training
+or validation split they use. Set `LORA_BENCHMARK_DATA_DIR` to reuse SIQA
+Parquet files under `<directory>/siqa/` without creating an Arrow disk copy.
+
+Results contain every validation measurement, `reported_accuracy` and
+`reported_accuracy_step`. Selection includes the final evaluation at step
+3000. Report the maximum separately for each seed before averaging.
+
+CPU optimizer checks:
+
+```bash
+python -m pytest tests
+```

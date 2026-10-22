@@ -58,6 +58,7 @@ def save_training_checkpoint(
     epoch_generator_state,
     losses,
     validation_scores,
+    optimizer_lr_scheduler=None,
 ):
     path = checkpoint_path(config)
     if path is None:
@@ -72,6 +73,7 @@ def save_training_checkpoint(
         "epoch_generator_state": epoch_generator_state,
         "model_trainable_state": _trainable_parameter_state(model),
         "optimizer_state": optimizer.state_dict(),
+        "optimizer_lr_scheduler": optimizer_lr_scheduler.state_dict() if optimizer_lr_scheduler is not None else None,
         "optimizer_attrs": {
             name: getattr(optimizer, name)
             for name in ("_sched_step",)
@@ -87,7 +89,7 @@ def save_training_checkpoint(
     return path
 
 
-def load_training_checkpoint(config, model, optimizer):
+def load_training_checkpoint(config, model, optimizer, optimizer_lr_scheduler=None):
     path = checkpoint_path(config)
     if path is None or not path.is_file():
         return None
@@ -109,6 +111,8 @@ def load_training_checkpoint(config, model, optimizer):
             parameter.copy_(saved.to(parameter.device, parameter.dtype))
 
     optimizer.load_state_dict(state["optimizer_state"])
+    if optimizer_lr_scheduler is not None and state.get("optimizer_lr_scheduler") is not None:
+        optimizer_lr_scheduler.load_state_dict(state["optimizer_lr_scheduler"])
     for name, value in state.get("optimizer_attrs", {}).items():
         setattr(optimizer, name, value)
     _restore_rng_state(state.get("rng_state"))

@@ -2,6 +2,7 @@ import math
 
 import torch
 from torch.optim import Optimizer
+from .retractions import RETRACTIONS, left_orthogonalize, retract_candidate
 
 
 class FixedRank:
@@ -244,21 +245,32 @@ class Riemannion(Optimizer):
         nesterov     = defaults.get('nesterov', False)
         nuclear_scale = defaults.get('nuclear_scale', False)
         weight_decay = defaults.get('weight_decay', 0.0)
+        retraction = defaults.get('retraction', 'native')
+        retraction = 'svd' if retraction == 'native' else retraction
+        if retraction not in RETRACTIONS:
+            raise ValueError(f"Unknown retraction: {retraction}")
+        transport_snapshot = defaults.get('transport_snapshot', False)
+        if momentum and retraction != 'svd' and not transport_snapshot:
+            raise ValueError("Riemannion retraction ablations require momentum=0.")
         super().__init__(params, {
             'lr': lr, 'momentum': momentum, 'nesterov': nesterov,
             'nuclear_scale': nuclear_scale, 'weight_decay': weight_decay,
+            'retraction': retraction,
         })
         self.svd_driver = None
+        self.transport_snapshot = transport_snapshot
+        self.last_retraction_fallbacks = 0
 
     @torch.no_grad()
     def get_deltas(self, A, B, manifold: FixedRank) -> tuple:
-        # Riemannion updates the left factor through the retraction geometry.
+        # Legacy baseline. RiemannionOriginal overrides this with the
+        # auxiliary-block gradient used in the authors' tangent coordinates.
         dot_A = torch.zeros_like(A.T[:, :manifold.r])
         dot_B = B.grad.T[:manifold.r, :]
 
         r = manifold.r
-        A_eff = A.T[:, :r]
-        B_eff = B.T[:r, :]
+        A_eff = A.T[:, :r]      # (out, r) — Stiefel factor
+        B_eff = B.T[:r, :]      # (r, in)
         point = [A_eff, B_eff]
 
         vec = manifold.euclidian_to_reimanian(point=point, vec=[dot_A, dot_B])
@@ -275,9 +287,10 @@ class Riemannion(Optimizer):
     @torch.no_grad()
     def apply_momentum(self, point: list, vec: list, state: dict,
                        manifold: FixedRank, beta: float, nesterov: bool) -> list:
+        saved_point = [p.clone() for p in point] if self.transport_snapshot else point
         if 'momentum' not in state:
             state['momentum'] = (vec[0], vec[1])
-            state['prev_point'] = point
+            state['prev_point'] = saved_point
             return vec
 
         m_vec = manifold.transport(
@@ -285,13 +298,16 @@ class Riemannion(Optimizer):
             point_Y=point,
             vec_X=state['momentum'],
         )
+        # Heavy-ball: m_t = beta * transported(m_{t-1}) + g_t
         dot_A = beta * m_vec[0] + vec[0]
         dot_B = beta * m_vec[1] + vec[1]
 
-        state['prev_point'] = point
+        state['prev_point'] = saved_point
         state['momentum'] = [dot_A, dot_B]
 
         if nesterov:
+            # Nesterov look-ahead: use beta * transported(m_{t-1}) + (1 + beta) * g_t
+            # This is equivalent to taking the gradient at the look-ahead point.
             dot_A = beta * m_vec[0] + (1 + beta) * vec[0]
             dot_B = beta * m_vec[1] + (1 + beta) * vec[1]
 
@@ -303,7 +319,7 @@ class Riemannion(Optimizer):
 
         Q_l, R_l = torch.linalg.qr(left)
         Q_r, R_r = torch.linalg.qr(right.T)
-        T = R_l @ R_r.T
+        T = R_l @ R_r.T  # (2r, 2r)
         U, S, Vt = torch.linalg.svd(T, driver=self.svd_driver)
 
         A_part = Q_l @ U
@@ -330,6 +346,7 @@ class Riemannion(Optimizer):
 
     @torch.no_grad()
     def step(self, closure=None):
+        self.last_retraction_fallbacks = 0
         for group in self.param_groups:
             A_idx = group['param_names'].index('lora_A.weight')
             B_idx = group['param_names'].index('lora_B.weight')
@@ -375,10 +392,22 @@ class Riemannion(Optimizer):
                 point=point, vec=[dot_A, dot_B], weight_decay=weight_decay,
             )
 
-            new_A, new_B = manifold.retraction(
-                point=point,
-                tangent_vec=[-lr * dot_A, point[1] - lr * dot_B],
-            )
+            retraction = group.get('retraction', 'svd')
+            if retraction == 'svd':
+                new_A, new_B = manifold.retraction(
+                    point=point,
+                    tangent_vec=[-lr * dot_A, point[1] - lr * dot_B],
+                )
+            else:
+                left, right = manifold.embedding(
+                    point, [-lr * dot_A, point[1] - lr * dot_B], ambient=False,
+                )
+                # Convert from the baseline's (left, right) convention to BA.
+                right_new, left_new, fallback = retract_candidate(
+                    point[1], point[0], left, right, retraction,
+                )
+                new_B, new_A = left_orthogonalize(right_new, left_new)
+                self.last_retraction_fallbacks += int(fallback)
 
             A_zero = torch.zeros_like(new_A)
             B_orth = torch.linalg.qr(new_B.T).Q.T

@@ -50,7 +50,7 @@ def _example_to_prompt_and_gold(ex, chat_template: bool = False):
 
 
 def get_train_dataloader(tokenizer, config):
-    train_dataset = load_dataset("google/boolq")["train"]
+    train_dataset = load_dataset("google/boolq", split="train")
 
     collator = GenericSFTCollator(
         tokenizer=tokenizer,
@@ -94,7 +94,7 @@ class BoolQEval(BaseLogprobEval):
     dataset_label = "BoolQ"
 
     def load_eval_dataset(self):
-        return load_dataset("google/boolq")["validation"]
+        return load_dataset("google/boolq", split="validation")
 
     def example_to_prompt_gold_choices(self, ex, use_chat_template: bool):
         gold = boolq_label_text(ex["answer"])

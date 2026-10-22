@@ -2,6 +2,7 @@ import torch
 from torch.optim import Optimizer
 
 from .utils import *
+from .retractions import RETRACTIONS, retract_lora
 
 
 @torch.no_grad()
@@ -114,8 +115,23 @@ class LoRATSD(Optimizer):
         log_f_inner: bool = False,
         log_grads: bool = False,
         log_optimizer_stats: bool = True,
+        retraction: str = "native",
+        retraction_gauge: str = "native",
+        retraction_momentum: str = "factor",
     ):
+        retraction = "factor" if retraction == "native" else retraction
+        if retraction not in RETRACTIONS:
+            raise ValueError(f"Unknown retraction: {retraction}")
+        if retraction_gauge not in ("native", "left_orthogonal"):
+            raise ValueError(f"Unknown retraction gauge: {retraction_gauge}")
+        if retraction_momentum not in ("factor", "projected"):
+            raise ValueError(f"Unknown momentum policy: {retraction_momentum}")
+        if use_momentum and retraction_momentum == "factor" and (retraction != "factor" or retraction_gauge != "native"):
+            raise ValueError("Retraction ablations require projected momentum or no momentum.")
         defaults = dict(
+            retraction=retraction,
+            retraction_gauge=retraction_gauge,
+            retraction_momentum=retraction_momentum,
             norm_ord=norm_ord,
             lr_A=lr_A,
             lr_B=lr_B,
@@ -133,6 +149,7 @@ class LoRATSD(Optimizer):
             log_optimizer_stats=log_optimizer_stats,
         )
         self.last_logs = None
+        self.last_retraction_fallbacks = 0
 
         self.use_momentum = use_momentum
         self.momentum_cf = momentum_cf
@@ -227,6 +244,7 @@ class LoRATSD(Optimizer):
 
     @torch.no_grad()
     def step(self, closure=None):
+        self.last_retraction_fallbacks = 0
         loss = None
         if closure is not None:
             with torch.enable_grad():
@@ -265,7 +283,7 @@ class LoRATSD(Optimizer):
             raw_G_A = G_A32.detach().cpu() if group.get("log_grads") else None
             raw_G_B = G_B32.detach().cpu() if group.get("log_grads") else None
 
-            if self.use_momentum:
+            if self.use_momentum and group.get("retraction_momentum", "factor") == "factor":
                 stA = self.state[A]
                 bufA = stA.get("momentum_buffer", None)
                 if bufA is None:
@@ -302,6 +320,21 @@ class LoRATSD(Optimizer):
             M = BtB_i @ (G_A32 @ A32.t()) @ AAt_i
             L_g = torch.cat([B32, G_B32 @ AAt_i], dim=1)
             R_g = torch.cat([BtB_i @ G_A32 - M @ A32, A32], dim=0)
+
+            if self.use_momentum and group.get("retraction_momentum") == "projected":
+                # Projection transport of the ambient tangent momentum. Its
+                # low-rank representation is independent of the factor gauge.
+                state = self.state[A]
+                previous = state.get("tangent_momentum")
+                beta = self.momentum_cf
+                if previous is None:
+                    L_g, R_g = (1.0 - beta) * L_g, R_g
+                else:
+                    L_g, R_g = _proj_T_factored(
+                        torch.cat([beta * previous[0], (1.0 - beta) * L_g], dim=1),
+                        torch.cat([previous[1], R_g], dim=0), U_B, V_A,
+                    )
+                state["tangent_momentum"] = (L_g, R_g)
 
             if group["log_f_inner"]:
                 dA_sgd = -lr_A * G_A32
@@ -385,8 +418,16 @@ class LoRATSD(Optimizer):
                 dA32.mul_(scale)
                 dB32.mul_(scale)
 
-            A.add_(dA32.to(A.dtype))
-            B.add_(dB32.to(B.dtype))
+            retraction = group.get("retraction", "factor")
+            gauge = group.get("retraction_gauge", "native")
+            if retraction == "factor" and gauge == "native":
+                A.add_(dA32.to(A.dtype))
+                B.add_(dB32.to(B.dtype))
+            else:
+                new_A, new_B, fallback = retract_lora(A32, B32, dA32, dB32, retraction, gauge)
+                A.copy_(new_A.to(A.dtype))
+                B.copy_(new_B.to(B.dtype))
+                self.last_retraction_fallbacks += int(fallback)
 
             if self.balance and (self._sched_step % self.rebalance_every == 0):
                 self._rebalance_group(A, B)

@@ -18,3 +18,33 @@ def make_linear_warmup_decay(base_lr: float, total_steps: int, warmup_frac: floa
 
     return sched
 
+
+def make_torch_linear_warmup_decay(
+    optimizer, total_steps: int, warmup_frac: float = 0.1, min_lr: float = 0.0
+):
+    """Linear warmup and decay for standard torch optimizers.
+
+    The first optimizer update uses ``base_lr / warmup_steps`` and the final
+    update uses ``min_lr``.
+    """
+    import torch
+
+    total_steps = max(1, int(total_steps))
+    warmup_steps = max(1, int(round(warmup_frac * total_steps)))
+
+    def make_lr_lambda(base_lr):
+        floor = min(float(min_lr), float(base_lr))
+        floor_ratio = floor / float(base_lr) if base_lr > 0 else 0.0
+
+        def lr_lambda(scheduler_step):
+            update_step = min(int(scheduler_step) + 1, total_steps)
+            if update_step <= warmup_steps:
+                return update_step / warmup_steps
+            decay_steps = max(1, total_steps - warmup_steps)
+            progress = (update_step - warmup_steps) / decay_steps
+            return 1.0 + (floor_ratio - 1.0) * progress
+
+        return lr_lambda
+
+    lambdas = [make_lr_lambda(group["lr"]) for group in optimizer.param_groups]
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambdas)

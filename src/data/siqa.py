@@ -1,11 +1,26 @@
+import os
 import re
+from pathlib import Path
+from functools import lru_cache
 
 import torch
-from datasets import load_dataset
+from datasets import Dataset, load_dataset
 from torch.utils.data import DataLoader
 
 from .base_eval import BaseLogprobEval
 from .data_common import GenericSFTCollator
+
+
+@lru_cache(maxsize=2)
+def _load_split(split):
+    root = os.environ.get("LORA_BENCHMARK_DATA_DIR")
+    if root:
+        import pyarrow.parquet as pq
+        files = sorted((Path(root) / "siqa").rglob(f"{split}*.parquet"))
+        if not files:
+            raise FileNotFoundError(f"Missing local SIQA {split} parquet under {root}")
+        return Dataset(pq.read_table([str(path) for path in files]))
+    return load_dataset("allenai/social_i_qa", split=split)
 
 
 def siqa_prompt(
@@ -73,7 +88,7 @@ def _example_to_prompt_and_gold(ex, chat_template: bool = False):
 
 
 def get_train_dataloader(tokenizer, config):
-    train_dataset = load_dataset("allenai/social_i_qa")["train"]
+    train_dataset = _load_split("train")
 
     collator = GenericSFTCollator(
         tokenizer=tokenizer,
@@ -121,7 +136,7 @@ class SIQAEval(BaseLogprobEval):
     _CHOICES = ["A", "B", "C"]
 
     def load_eval_dataset(self):
-        return load_dataset("allenai/social_i_qa")["validation"]
+        return _load_split("validation")
 
     def example_to_prompt_gold_choices(self, ex, use_chat_template: bool):
         gold = siqa_label_text(ex["label"])

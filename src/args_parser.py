@@ -7,6 +7,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--optimizer",
         required=True,
+        type=lambda value: "riemannion_original" if value.lower() == "riemannionoriginal" else value.lower(),
         choices=[
             "lora_sgd",
             "adamw",
@@ -14,6 +15,7 @@ def build_parser() -> argparse.ArgumentParser:
             "riemannian_sgd",
             "lora_rite",
             "riemannion",
+            "riemannion_original",
             "lora_pro",
             "lora_muon_manifold",
             "lora_tsd",
@@ -37,6 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr-a", type=float, required=True)
     parser.add_argument("--lr-b", type=float, default=5e-3)
     parser.add_argument("--lr-scheduler", choices=["linear"], default=None)
+    parser.add_argument("--min-lr", type=float, default=1e-5)
+    parser.add_argument("--grad-checkpointing", action="store_true")
+    parser.add_argument("--metrics-jsonl", default=None)
+    parser.add_argument("--retraction", choices=["native", "factor", "svd", "orthographic", "ksl"], default="native")
+    parser.add_argument("--retraction-gauge", choices=["native", "left_orthogonal"], default="native")
+    parser.add_argument("--retraction-momentum", choices=["factor", "projected"], default="factor")
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--max-delta-norm", type=float, default=0.5)
 
@@ -110,7 +118,6 @@ def parse_config(argv=None) -> dict:
     config["lora_bias"] = "none"
     config["lora_init"] = None
     config["add_W"] = False
-    config["grad_checkpointing"] = False
     config["lr_A_scheduler"] = None
     config["lr_B_scheduler"] = None
     return config
