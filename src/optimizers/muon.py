@@ -71,7 +71,7 @@ class Muon(torch.optim.Optimizer):
 
             total_params = sum(p.numel() for p in params)
             updates_flat = torch.zeros(
-                total_params, device="cuda", dtype=torch.bfloat16
+                total_params, device=group["params"][0].device, dtype=torch.bfloat16
             )
             curr_idx = 0
             for i, p in enumerate(params):

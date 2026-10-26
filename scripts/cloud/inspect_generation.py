@@ -16,6 +16,14 @@ for path in ["/", "/tmp", "/home/jovyan", "/home/jovyan/shares/SR006.nfs3"]:
                                       "available_bytes": stat.f_bavail * stat.f_frsize}), flush=True)
 if (root / "STOP_STORAGE.json").exists():
     print("GEN_STORAGE_STOP " + (root / "STOP_STORAGE.json").read_text(), flush=True)
+for path in sorted(root.glob("queue-*.json")):
+    if path.is_file() and not path.is_symlink():
+        try:
+            record = json.loads(path.read_text())
+        except json.JSONDecodeError as error:
+            print("GEN_QUEUE " + json.dumps({"file": path.name, "error": str(error)}), flush=True)
+        else:
+            print("GEN_QUEUE " + json.dumps({"file": path.name, "data": record}), flush=True)
 history_records = []
 for run in sorted(root.glob("*_seed42")):
     for name in ["run.json", "config.json", "data-manifest.json", "completed.json"]:

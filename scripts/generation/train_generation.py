@@ -12,12 +12,13 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import torch
-from args_parser import parse_config
 from main import build_model, initialize_subspace, set_seed
-from optimizers import build_optimizer, make_linear_warmup_decay
 from disk_guard import DiskGuard
 from generation_data import build_data
 from generation_eval import check_evaluation_dependencies, evaluate
+from optimizer_presets import (METHODS, GenerationSchedule, enable_fixed_original_tangent,
+                               generation_config, generation_optimizer, gradient_norm,
+                               optimizer_parameters)
 
 
 def append_metric(path: Path, row: dict) -> None:
@@ -36,7 +37,7 @@ def next_batches(loader):
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset", choices=["e2e_nlg", "smol_smoltalk_100k"], required=True)
-    parser.add_argument("--method", choices=["lora_tsd", "lora_rite"], required=True)
+    parser.add_argument("--method", choices=METHODS, required=True)
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
@@ -47,23 +48,7 @@ def main() -> None:
           write_path=Path(os.environ["HF_HOME"]))
     microbatch = 4 if args.dataset == "e2e_nlg" else 2
     max_length = 512 if args.dataset == "e2e_nlg" else 2048
-    lr = 0.005 if args.method == "lora_tsd" else 0.00008
-    flags = ["--run-name", run.name, "--optimizer", args.method,
-             "--model", "meta-llama/Llama-3.2-1B-Instruct", "--dataset", args.dataset,
-             "--steps", str(args.steps), "--seed", "42", "--output-dir", str(run),
-             "--lr-a", str(lr), "--lr-b", str(lr), "--checkpoint-every", "0",
-             "--train-batch-size", str(microbatch), "--grad-accum-steps", str(32 // microbatch),
-             "--eval-batch-size", "4", "--eval-every", "250", "--grad-checkpointing",
-             "--rsvd-init", "--rsvd-q", "15", "--rsvd-scale", "0",
-             "--grad-clip-norm", "1", "--max-delta-norm", "0.1",
-             "--use-momentum", "--momentum-cf", "0.95", "--ball-iters", "5",
-             "--ball-balance", "--ball-balance-mode", "norm", "--ball-rebalance-every", "1",
-             "--muon-ns-steps", "5", "--weight-decay", "0"]
-    config = parse_config(flags)
-    config["lora_init"] = True
-    config.update(max_sequence_length=max_length, effective_batch=32,
-                  actual_schedule="linear warmup10pct decay to1e-5, applied before each update",
-                  checkpoints=False, save_final_model=False)
+    config = generation_config(args.method, args.dataset, args.steps, str(run), microbatch, max_length)
     (run / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     gpu = subprocess.run(["nvidia-smi", "--query-gpu=index,name,memory.used,memory.free",
                           "--format=csv,noheader"], capture_output=True, text=True, timeout=15)
@@ -87,13 +72,14 @@ def main() -> None:
     (run / "data-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     check_evaluation_dependencies(generation_examples, data_guard)
     initialize_subspace(config, model, train_loader)
+    enable_fixed_original_tangent(model, args.method)
     set_seed(42)
     if train_loader.generator is not None:
         train_loader.generator.manual_seed(42)
     model.zero_grad(set_to_none=True)
-    optimizer = build_optimizer(groups, config)
-    parameters = [parameter for group in groups for parameter in group["params"]]
-    schedule = make_linear_warmup_decay(lr, args.steps, warmup_frac=0.1, min_lr=1e-5)
+    optimizer = generation_optimizer(groups, config)
+    parameters = optimizer_parameters(optimizer)
+    schedule = GenerationSchedule(optimizer, config)
     history = run / "history.jsonl"
 
     def validate(step: int) -> None:
@@ -138,15 +124,10 @@ def main() -> None:
             weight = count / tokens
             (loss * weight).backward()
             accumulated_loss += float(loss.detach()) * weight
-        norm = torch.nn.utils.clip_grad_norm_(parameters, config["grad_clip_norm"], error_if_nonfinite=True)
-        used_lr = schedule(step, lr, 0)
-        for group in optimizer.param_groups:
-            if args.method == "lora_tsd":
-                group["lr_A"] = used_lr
-                group["lr_B"] = used_lr
-            else:
-                group["lr"] = used_lr
+        norm = gradient_norm(parameters, config["grad_clip_norm"])
+        used_lr = schedule.before_step(step)
         optimizer.step()
+        schedule.after_step()
         if not math.isfinite(accumulated_loss):
             raise RuntimeError("Non-finite aggregate loss")
         append_metric(history, {"event": "train", "step": step, "train/loss": accumulated_loss,
