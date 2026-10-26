@@ -42,6 +42,7 @@ for run in sorted(root.glob("*_seed42")):
         for line in lines:
             if line.startswith("GEN_GPU_BEFORE_TRAIN "):
                 print("GEN_GPU_INVENTORY " + json.dumps({"run": run.name, "data": json.loads(line.split(" ", 1)[1])}), flush=True)
-        print("GEN_LOG_TAIL " + json.dumps({"run": run.name, "tail": lines[-35:]}), flush=True)
+        # Keep each emitted JSON record below the platform's stream chunk size.
+        print("GEN_LOG_TAIL " + json.dumps({"run": run.name, "tail": [line[:220] for line in lines[-10:]]}), flush=True)
     checkpoints = [str(p) for p in run.rglob("*") if p.suffix in {".pt", ".pth", ".safetensors", ".bin"}]
     print("GEN_CHECKPOINTS " + json.dumps({"run": run.name, "paths": checkpoints}), flush=True)
