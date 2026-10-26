@@ -4,10 +4,18 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 import sacrebleu
 import torch
 from transformers import AutoTokenizer
+from transformers import LlamaConfig, LlamaForCausalLM
+from peft import LoraConfig, get_peft_model
+from args_parser import parse_config
+from models import get_lora_param_groups, rsvd_init_standard_lora
+from optimizers import build_optimizer
 
 from disk_guard import DiskGuard
 from generation_data import ChatCollator, _prepare_ifeval, e2e_messages, encode_messages
@@ -18,6 +26,33 @@ def main() -> None:
     root = Path(os.environ["GENERATION_ROOT"])
     guard = DiskGuard(root, "cpu_smoke")
     guard(pending_write_bytes=100_000_000, reason="tokenizer_and_smoke_data")
+    optimizer_losses = {}
+    for method, lr in [("lora_tsd", 0.005), ("lora_rite", 0.00008)]:
+        torch.manual_seed(42)
+        tiny = LlamaForCausalLM(LlamaConfig(vocab_size=128, hidden_size=64,
+                                           intermediate_size=128, num_hidden_layers=1,
+                                           num_attention_heads=4, num_key_value_heads=2))
+        tiny = get_peft_model(tiny, LoraConfig(r=16, lora_alpha=16,
+                                              target_modules=["q_proj", "k_proj", "v_proj"],
+                                              task_type="CAUSAL_LM"))
+        groups = get_lora_param_groups(tiny, add_W=False)
+        ids = torch.randint(0, 128, (2, 16))
+        batch = {"input_ids": ids, "labels": ids.clone(), "attention_mask": torch.ones_like(ids)}
+        rsvd_init_standard_lora(tiny, [batch] * 3, q=1, device="cpu", scale=0)
+        config = parse_config(["--run-name", "smoke", "--optimizer", method,
+                               "--model", "meta-llama/Llama-3.2-1B-Instruct", "--dataset", "smoke",
+                               "--lr-a", str(lr), "--lr-b", str(lr), "--ball-iters", "5",
+                               "--max-delta-norm", "0.1", "--ball-balance", "--use-momentum"])
+        optimizer = build_optimizer(groups, config)
+        losses = []
+        for _ in range(2):
+            optimizer.zero_grad(set_to_none=True)
+            loss = tiny(**batch).loss
+            assert torch.isfinite(loss)
+            loss.backward()
+            optimizer.step()
+            losses.append(float(loss.detach()))
+        optimizer_losses[method] = losses
     tokenizer = AutoTokenizer.from_pretrained("meta-llama/Llama-3.2-1B-Instruct",
                                               token=os.environ.get("HF_TOKEN"))
     if tokenizer.pad_token_id is None:
@@ -56,6 +91,7 @@ def main() -> None:
         assert len(details) == 4
         assert len(scores) == 4 and all(0 <= value <= 1 for value in scores.values())
     print("GEN_CPU_SMOKE " + json.dumps({"status": "passed", "assistant_targets": len(selected),
+                                            "optimizer_losses": optimizer_losses,
                                             "collated_shape": list(collated["input_ids"].shape),
                                             "e2e_bleu": bleu, "e2e_chrfpp": chrf,
                                             "ifeval_prompts": len(prompts),
