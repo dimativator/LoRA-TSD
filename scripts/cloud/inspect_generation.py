@@ -1,5 +1,8 @@
 """Emit persistent campaign logs and metrics without loading model weights."""
 
+import base64
+import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +16,7 @@ for path in ["/", "/tmp", "/home/jovyan", "/home/jovyan/shares/SR006.nfs3"]:
                                       "available_bytes": stat.f_bavail * stat.f_frsize}), flush=True)
 if (root / "STOP_STORAGE.json").exists():
     print("GEN_STORAGE_STOP " + (root / "STOP_STORAGE.json").read_text(), flush=True)
+history_records = []
 for run in sorted(root.glob("*_seed42")):
     for name in ["run.json", "config.json", "data-manifest.json", "completed.json"]:
         path = run / name
@@ -25,7 +29,7 @@ for run in sorted(root.glob("*_seed42")):
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            print("GEN_HISTORY " + json.dumps({"run": run.name, "data": row}), flush=True)
+            history_records.append({"run": run.name, "data": row})
     for name in ["disk.jsonl", "disk-trainer.jsonl"]:
         path = run / name
         if path.exists():
@@ -46,3 +50,13 @@ for run in sorted(root.glob("*_seed42")):
         print("GEN_LOG_TAIL " + json.dumps({"run": run.name, "tail": [line[:220] for line in lines[-10:]]}), flush=True)
     checkpoints = [str(p) for p in run.rglob("*") if p.suffix in {".pt", ".pth", ".safetensors", ".bin"}]
     print("GEN_CHECKPOINTS " + json.dumps({"run": run.name, "paths": checkpoints}), flush=True)
+
+# Transfer complete histories in small, checksummed records through Cloud logs.
+payload = json.dumps(history_records, separators=(",", ":")).encode()
+encoded = base64.b64encode(gzip.compress(payload, mtime=0)).decode()
+digest = hashlib.sha256(payload).hexdigest()
+chunks = [encoded[index:index + 1600] for index in range(0, len(encoded), 1600)]
+for index, chunk in enumerate(chunks):
+    print("GEN_HISTORY_CHUNK " + json.dumps({"index": index, "total": len(chunks),
+                                             "sha256": digest, "records": len(history_records),
+                                             "payload": chunk}), flush=True)
