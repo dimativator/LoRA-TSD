@@ -38,6 +38,10 @@ for run in sorted(root.glob("*_seed42")):
                 print("GEN_DISK_LAST " + json.dumps({"run": run.name, "file": name, "data": row}), flush=True)
     log = run / "train.log"
     if log.exists():
-        print("GEN_LOG_TAIL " + json.dumps({"run": run.name, "tail": log.read_text().splitlines()[-35:]}), flush=True)
+        lines = log.read_text().splitlines()
+        for line in lines:
+            if line.startswith("GEN_GPU_BEFORE_TRAIN "):
+                print("GEN_GPU_INVENTORY " + json.dumps({"run": run.name, "data": json.loads(line.split(" ", 1)[1])}), flush=True)
+        print("GEN_LOG_TAIL " + json.dumps({"run": run.name, "tail": lines[-35:]}), flush=True)
     checkpoints = [str(p) for p in run.rglob("*") if p.suffix in {".pt", ".pth", ".safetensors", ".bin"}]
     print("GEN_CHECKPOINTS " + json.dumps({"run": run.name, "paths": checkpoints}), flush=True)
