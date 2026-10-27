@@ -187,6 +187,9 @@ def build_data(tokenizer, dataset: str, seed: int, max_length: int, microbatch: 
             train, validation, generation, manifest = _e2e_data(data_dir, guard)
         elif dataset == "smol_smoltalk_100k":
             train, validation, generation, manifest = _smol_data(data_dir, guard)
+        elif dataset in {"webnlg", "viggo"}:
+            from structured_data import build_structured_data
+            train, validation, generation, manifest = build_structured_data(dataset, data_dir, guard)
         else:
             raise ValueError("Unsupported generation dataset: " + dataset)
         manifest["raw_train_digest"] = digest({"fingerprint": train._fingerprint,
@@ -220,3 +223,22 @@ def build_data(tokenizer, dataset: str, seed: int, max_length: int, microbatch: 
     val_loader = DataLoader(processed[1], batch_size=microbatch, shuffle=False,
                             collate_fn=collator, num_workers=0)
     return train_loader, val_loader, generation, manifest
+
+
+def build_test_loader(tokenizer, generation: dict, max_length: int, microbatch: int,
+                      guard: Callable) -> tuple[DataLoader, dict]:
+    """Prepare test targets for evaluation only, without adding them to training."""
+    examples = generation["test_examples"]
+    records = [{"messages": row["messages"] + [{"role": "assistant", "content": reference}]}
+               for row in examples for reference in row["references"]]
+    guard(pending_write_bytes=len(records) * max_length * 24, reason="test_tokenization")
+    encoded = Dataset.from_list(records).map(
+        lambda row: encode_messages(tokenizer, row["messages"], max_length),
+        remove_columns=["messages"], keep_in_memory=True, desc="Tokenizing test targets")
+    if any(not any(label != -100 for label in row["labels"][1:]) for row in encoded):
+        raise ValueError("Test target lost all supervision at the configured sequence length")
+    loader = DataLoader(encoded, batch_size=microbatch, shuffle=False,
+                        collate_fn=ChatCollator(tokenizer), num_workers=0)
+    return loader, {"test_target_examples": len(encoded), "test_generation_inputs": len(examples),
+                    "test_tokenized_fingerprint": encoded._fingerprint,
+                    "test_use": "Final evaluation only, never optimization or model selection"}

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 import torch
 from main import build_model, initialize_subspace, set_seed
 from disk_guard import DiskGuard
-from generation_data import build_data
+from generation_data import build_data, build_test_loader, digest
 from generation_eval import check_evaluation_dependencies, evaluate
 from optimizer_presets import (METHODS, GenerationSchedule, enable_fixed_original_tangent,
                                generation_config, generation_optimizer, gradient_norm,
@@ -36,7 +36,7 @@ def next_batches(loader):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", choices=["e2e_nlg", "smol_smoltalk_100k"], required=True)
+    parser.add_argument("--dataset", choices=["e2e_nlg", "smol_smoltalk_100k", "webnlg", "viggo"], required=True)
     parser.add_argument("--method", choices=METHODS, required=True)
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -46,9 +46,11 @@ def main() -> None:
     guard = DiskGuard(root, run.name, run / "disk-trainer.jsonl")
     guard(pending_write_bytes=3_000_000_000, reason="model_cache_reserve",
           write_path=Path(os.environ["HF_HOME"]))
-    microbatch = 4 if args.dataset == "e2e_nlg" else 2
-    max_length = 512 if args.dataset == "e2e_nlg" else 2048
+    short_generation = args.dataset != "smol_smoltalk_100k"
+    microbatch = 4 if short_generation else 2
+    max_length = 512 if short_generation else 2048
     config = generation_config(args.method, args.dataset, args.steps, str(run), microbatch, max_length)
+    config["final_test_evaluation"] = args.dataset in {"webnlg", "viggo"}
     (run / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     gpu = subprocess.run(["nvidia-smi", "--query-gpu=index,name,memory.used,memory.free",
                           "--format=csv,noheader"], capture_output=True, text=True, timeout=15)
@@ -69,6 +71,13 @@ def main() -> None:
         return guard(pending_write_bytes, reason, write_path=data_dir)
     train_loader, val_loader, generation_examples, manifest = build_data(
         tokenizer, args.dataset, 42, max_length, microbatch, data_dir, data_guard)
+    test_loader = None
+    if "test_examples" in generation_examples:
+        test_loader, test_manifest = build_test_loader(
+            tokenizer, generation_examples, max_length, microbatch, data_guard)
+        manifest.update(test_manifest)
+        manifest["manifest_digest"] = digest({key: value for key, value in manifest.items()
+                                               if key != "manifest_digest"})
     (run / "data-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     check_evaluation_dependencies(generation_examples, data_guard)
     initialize_subspace(config, model, train_loader)
@@ -82,7 +91,7 @@ def main() -> None:
     schedule = GenerationSchedule(optimizer, config)
     history = run / "history.jsonl"
 
-    def validate(step: int) -> None:
+    def validate(step: int, eval_split: str = "validation") -> None:
         guard(reason="before_validation")
         begun = time.monotonic()
         model.gradient_checkpointing_disable()
@@ -91,9 +100,14 @@ def main() -> None:
             def eval_guard(pending_write_bytes: int = 0, reason: str = "periodic") -> dict:
                 target = data_dir if reason == "ifeval_nltk_data" else run
                 return guard(pending_write_bytes, reason, write_path=target)
-            result = evaluate(model, tokenizer, args.dataset, val_loader,
-                              generation_examples, run, step, eval_guard)
-            append_metric(history, {"event": "validation", "step": step, **result,
+            examples = generation_examples
+            loader = val_loader
+            if eval_split == "test":
+                examples = {**generation_examples, "examples": generation_examples["test_examples"]}
+                loader = test_loader
+            result = evaluate(model, tokenizer, args.dataset, loader,
+                              examples, run, step, eval_guard, eval_split=eval_split)
+            append_metric(history, {"event": eval_split, "step": step, **result,
                                     "validation_seconds": time.monotonic() - begun})
         finally:
             model.config.use_cache = False
@@ -138,9 +152,12 @@ def main() -> None:
                                 "cuda_peak_reserved_bytes": torch.cuda.max_memory_reserved()})
         if step % config["eval_every"] == 0 or step == args.steps:
             validate(step)
+    if test_loader is not None:
+        validate(args.steps, eval_split="test")
     guard(reason="before_completion_log")
     (run / "completed.json").write_text(json.dumps({"status": "completed", "steps": args.steps,
-                                                   "timestamp": time.time(), "checkpoints": False}) + "\n")
+                                                   "timestamp": time.time(), "checkpoints": False,
+                                                   "final_test_evaluated": test_loader is not None}) + "\n")
 
 
 if __name__ == "__main__":

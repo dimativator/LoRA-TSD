@@ -21,9 +21,9 @@ from optimizer_presets import (METHODS, GenerationSchedule, enable_fixed_origina
                                optimizer_parameters)
 
 
-def optimizer_smoke() -> dict:
+def optimizer_smoke(methods=METHODS) -> dict:
     results = {}
-    for method in METHODS:
+    for method in methods:
         torch.manual_seed(42)
         config = generation_config(method, "smoke", 3000, "/tmp/smoke", 2, 16)
         tiny = LlamaForCausalLM(LlamaConfig(vocab_size=128, hidden_size=64,

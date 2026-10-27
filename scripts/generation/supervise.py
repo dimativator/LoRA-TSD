@@ -146,7 +146,7 @@ def run_dataset(args: argparse.Namespace, dataset: str, root: Path,
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset", nargs="+", choices=["e2e_nlg", "smol_smoltalk_100k"], required=True)
+    parser.add_argument("--dataset", nargs="+", choices=["e2e_nlg", "smol_smoltalk_100k", "webnlg", "viggo"], required=True)
     parser.add_argument("--method", choices=METHODS, required=True)
     parser.add_argument("--steps", type=int, default=3000)
     args = parser.parse_args()

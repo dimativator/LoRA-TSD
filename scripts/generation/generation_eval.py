@@ -13,6 +13,7 @@ import torch
 
 
 logger = logging.getLogger(__name__)
+TEXT_GENERATION_TASKS = {"e2e_nlg": "e2e", "webnlg": "webnlg", "viggo": "viggo"}
 
 
 def _reference_streams(examples: list[dict]) -> list[list[str]]:
@@ -44,7 +45,7 @@ def _prepare_ifeval_runtime(root: str, guard: Callable) -> object:
 
 def check_evaluation_dependencies(generation_examples: dict, guard: Callable) -> None:
     """Fail before optimization if a required official scorer is unavailable."""
-    if generation_examples["task"] == "e2e_nlg":
+    if generation_examples["task"] in TEXT_GENERATION_TASKS:
         import sacrebleu  # noqa: F401
     else:
         _prepare_ifeval_runtime(generation_examples["ifeval_root"], guard)
@@ -79,8 +80,11 @@ def _score_ifeval(examples: list[dict], responses: list[str], root: str,
 
 @torch.inference_mode()
 def evaluate(model, tokenizer, dataset: str, val_dataloader,
-             generation_examples: dict, output_dir, step: int, guard: Callable) -> dict:
-    """Evaluate all development examples, preserving prompts and generation logs."""
+             generation_examples: dict, output_dir, step: int, guard: Callable,
+             eval_split: str = "validation") -> dict:
+    """Evaluate held-out examples, preserving identities and separate test logs."""
+    if eval_split not in {"validation", "test"}:
+        raise ValueError("Evaluation split must be validation or test")
     started = time.monotonic()
     check_evaluation_dependencies(generation_examples, guard)
     output_dir = Path(output_dir)
@@ -113,8 +117,8 @@ def evaluate(model, tokenizer, dataset: str, val_dataloader,
                    "val/target_tokens": target_tokens}
         metrics["val/perplexity"] = math.exp(min(metrics["val/loss"], 50.0))
         examples = generation_examples["examples"]
-        is_e2e = generation_examples["task"] == "e2e_nlg"
-        max_new_tokens = generation_examples.get("max_new_tokens", 128 if is_e2e else 2048)
+        text_prefix = TEXT_GENERATION_TASKS.get(generation_examples["task"])
+        max_new_tokens = generation_examples.get("max_new_tokens", 128 if text_prefix else 2048)
         batch_size = generation_examples.get("batch_size", 8)
         tokenizer.padding_side = "left"
         model.config.use_cache = True
@@ -148,27 +152,28 @@ def evaluate(model, tokenizer, dataset: str, val_dataloader,
                                          use_cache=True)
             generated = outputs[:, prefix_length:]
             responses = tokenizer.batch_decode(generated, skip_special_tokens=True)
-            for row, response, ids in zip(chunk, responses, generated):
+            for row, prompt, response, ids in zip(chunk, prompts, responses, generated):
                 token_list = ids.tolist()
                 end_positions = [index for index, token in enumerate(token_list) if token in eos_ids]
                 generated_length = end_positions[0] + 1 if end_positions else len(token_list)
-                scored_response = response.strip() if is_e2e else response
+                scored_response = response.strip() if text_prefix else response
                 predictions.append(scored_response)
-                details.append({"step": step, "prompt": row.get("prompt", row.get("mr")),
+                details.append({**row, "step": step, "evaluation_split": eval_split,
+                                "prompt": row.get("prompt", row.get("mr")), "rendered_prompt": prompt,
                                 "response": scored_response, "generated_tokens": generated_length,
                                 "hit_generation_limit": not end_positions and generated_length >= max_new_tokens,
                                 "references": row.get("references"), "key": row.get("key")})
-            logger.info("Generation validation step %s: %s/%s responses", step,
+            logger.info("Generation %s step %s: %s/%s responses", eval_split, step,
                         min(offset + batch_size, len(examples)), len(examples))
-        if is_e2e:
+        if text_prefix:
             import sacrebleu
             references = _reference_streams(examples)
             bleu = sacrebleu.metrics.BLEU()
             chrf = sacrebleu.metrics.CHRF(word_order=2)
-            metrics["e2e/bleu"] = bleu.corpus_score(predictions, references).score
-            metrics["e2e/chrfpp"] = chrf.corpus_score(predictions, references).score
-            metrics["e2e/bleu_signature"] = str(bleu.get_signature())
-            metrics["e2e/chrfpp_signature"] = str(chrf.get_signature())
+            metrics[f"{text_prefix}/bleu"] = bleu.corpus_score(predictions, references).score
+            metrics[f"{text_prefix}/chrfpp"] = chrf.corpus_score(predictions, references).score
+            metrics[f"{text_prefix}/bleu_signature"] = str(bleu.get_signature())
+            metrics[f"{text_prefix}/chrfpp_signature"] = str(chrf.get_signature())
             check_details = []
         else:
             scores, check_details = _score_ifeval(
@@ -179,14 +184,18 @@ def evaluate(model, tokenizer, dataset: str, val_dataloader,
                         "generation/hit_limit_count": sum(row["hit_generation_limit"] for row in details),
                         "generation/mean_output_tokens": sum(row["generated_tokens"] for row in details) / len(details),
                         "eval/seconds": time.monotonic() - started})
+        if eval_split == "test":
+            metrics = {"test/" + (key[4:] if key.startswith("val/") else key): value
+                       for key, value in metrics.items()}
         payload = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in details)
         checks = "".join(json.dumps(row) + "\n" for row in check_details)
         guard(pending_write_bytes=len(payload.encode()) + len(checks.encode()) + 20000,
-              reason="validation_prediction_logs")
+              reason=f"{eval_split}_prediction_logs")
         output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / f"predictions-step{step:06d}.jsonl").write_text(payload)
+        filename_prefix = "test-" if eval_split == "test" else ""
+        (output_dir / f"{filename_prefix}predictions-step{step:06d}.jsonl").write_text(payload)
         if checks:
-            (output_dir / f"ifeval-checks-step{step:06d}.jsonl").write_text(checks)
+            (output_dir / f"{filename_prefix}ifeval-checks-step{step:06d}.jsonl").write_text(checks)
         return metrics
     finally:
         tokenizer.padding_side = previous_padding
