@@ -1,4 +1,4 @@
-"""CPU preflight for pinned WebNLG/ViGGO data and three generation optimizers."""
+"""CPU preflight for pinned WebNLG/ViGGO data and requested optimizers."""
 
 import argparse
 from datetime import datetime, timezone
@@ -160,11 +160,17 @@ def save_result(directory: Path, result: dict, guard) -> Path:
 
 
 def main() -> None:
+    from optimizer_presets import METHODS as available_methods
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument("--methods", nargs="+", choices=available_methods, default=list(METHODS))
     args = parser.parse_args()
     if args.max_length <= 0:
         parser.error("max-length must be positive")
+    if len(args.methods) != len(set(args.methods)):
+        parser.error("Optimizer methods must occur only once")
+    methods = tuple(args.methods)
     root = Path(os.environ["GENERATION_ROOT"])
     if "nfs2" in str(root).lower() or not root.is_relative_to("/home/jovyan/shares/SR006.nfs3"):
         raise ValueError("CPU smoke outputs must use the campaign root on NFS3")
@@ -186,7 +192,7 @@ def main() -> None:
     os.environ["HF_DATASETS_CACHE"] = str(data_dir / "datasets-cache")
     tokenizer_cache = data_dir / "tokenizer-cache"
     result = {"status": "running", "timestamp": time.time(), "datasets": {},
-              "methods": list(METHODS), "max_length": args.max_length,
+              "methods": list(methods), "max_length": args.max_length,
               "checkpoints": False, "nfs2_accessed": False,
               "optimizer_losses": {}, "optimizer_smoke_rsvd_q": 1,
               "production_rsvd_q": 15, "optimizer_smoke_steps": 2}
@@ -231,18 +237,19 @@ def main() -> None:
                 result["length_violations"] = violations
                 raise ValueError("Native chat exceeds configured sequence length; no GPU launch: " +
                                  json.dumps(violations, separators=(",", ":")))
-            checks = optimizer_smoke(METHODS)
-            if set(checks) != set(METHODS):
-                raise AssertionError("Exactly three optimizer smokes are required")
-            result["optimizer_losses"] = {method: checks[method]["losses"] for method in METHODS}
+            checks = optimizer_smoke(methods)
+            if set(checks) != set(methods):
+                raise AssertionError("Optimizer smoke results must match the requested methods")
+            result["optimizer_losses"] = {method: checks[method]["losses"] for method in methods}
             result["optimizer_checks"] = {
                 method: {key: value for key, value in checks[method].items() if key not in {"preset", "losses"}}
-                for method in METHODS}
+                for method in methods}
             result["status"] = "passed"
         except Exception as error:
             result.update(status="failed", error=str(error))
             path = save_result(directory, result, guard)
-            print("GEN_CPU_SMOKE " + json.dumps({"status": "failed", "error": str(error),
+            print("GEN_CPU_SMOKE " + json.dumps({"status": "failed", "methods": list(methods),
+                                                 "error": str(error),
                                                  "result_path": str(path),
                                                  "token_lengths": {key: value["token_lengths"]
                                                                    for key, value in result["datasets"].items()}}), flush=True)

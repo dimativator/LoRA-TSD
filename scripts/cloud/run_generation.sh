@@ -20,6 +20,7 @@ if [[ "${1:-}" == "cpu-smoke" ]]; then
     exec python -u "$ROOT/scripts/generation/cpu_smoke.py"
 fi
 if [[ "${1:-}" == "structured-smoke" ]]; then
-    exec python -u "$ROOT/scripts/generation/structured_smoke.py"
+    shift
+    exec python -u "$ROOT/scripts/generation/structured_smoke.py" "$@"
 fi
 exec python -u "$ROOT/scripts/generation/supervise.py" "$@"
