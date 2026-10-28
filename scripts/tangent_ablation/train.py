@@ -133,6 +133,15 @@ def main() -> None:
     print("TANGENT_GPU_BEFORE_TRAIN " + json.dumps({"gpus": gpu.stdout, "processes": processes.stdout}), flush=True)
     if torch.cuda.device_count() != 1:
         raise RuntimeError("Exactly one visible GPU is required")
+    from huggingface_hub import snapshot_download
+    from models.model_fabric import LoRAModelFabric
+    revision = "9213176726f574b556790deb65791e0c5aa438b6"
+    snapshot = snapshot_download(config["model"], revision=revision,
+                                 allow_patterns=["*.json", "*.safetensors", "*.model", "*.jinja"],
+                                 token=os.environ.get("HF_TOKEN"))
+    LoRAModelFabric.MODEL_ALIASES[config["model"].lower()] = snapshot
+    config["model_revision"] = revision
+    (run / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     set_seed(args.seed)
     model, tokenizer, groups = build_model(config)
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
