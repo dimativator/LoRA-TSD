@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import statistics
 import subprocess
 import sys
 import threading
@@ -101,6 +102,28 @@ def run_case(root: Path, case: dict, worker: str) -> None:
         raise RuntimeError('Training failed. Queue stopped for inspection: ' + run.name)
 
 
+def summarize(root: Path) -> dict:
+    rows = []
+    for variant in VARIANTS:
+        selected = json.loads((root / f'selected-{variant}.json').read_text())
+        for dataset in ('boolq', 'siqa'):
+            results = []
+            for seed in SEEDS:
+                case = dict(phase='sweep' if dataset == 'boolq' and seed == 42 else 'confirm',
+                            variant=variant, dataset=dataset, lr=selected['lr'], seed=seed)
+                result = read_result(root, case)
+                if result is None:
+                    raise RuntimeError('Cannot summarize an incomplete campaign')
+                results.append({'seed': seed, 'best_score': result['best_score'],
+                                'best_step': result.get('best_step'), 'run': name(case)})
+            scores = [record['best_score'] for record in results]
+            rows.append({'variant': variant, 'dataset': dataset, 'lr': selected['lr'],
+                         'mean_best_accuracy': statistics.mean(scores),
+                         'sample_std_best_accuracy': statistics.stdev(scores), 'seeds': results})
+    return {'status': 'completed', 'timestamp': time.time(), 'rows': rows,
+            'metric': 'best accuracy at scheduled evaluations250..3000; mean and sample std across3 seeds'}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--worker', required=True)
@@ -117,6 +140,7 @@ def main() -> None:
             raise RuntimeError('Campaign training failure signal present')
         cases, complete = pending(root)
         if complete:
+            atomic_json(root / 'campaign-results.json', summarize(root))
             print('ABLATION_QUEUE_COMPLETE', flush=True)
             return
         claimed = False

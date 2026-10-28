@@ -46,6 +46,16 @@ def main() -> None:
             if path.exists():
                 entry[key] = json.loads(path.read_text())
         entry['last_metric'] = last_record(directory / 'history.jsonl')
+        entry['evaluations'] = []
+        history = directory / 'history.jsonl'
+        if history.exists():
+            for line in history.read_text().splitlines():
+                try:
+                    row = json.loads(line)
+                    if row.get('event') == 'validation':
+                        entry['evaluations'].append(row)
+                except json.JSONDecodeError:
+                    pass
         entry['last_disk'] = last_record(directory / 'disk-trainer.jsonl')
         log = directory / 'train.log'
         if log.exists():
@@ -54,10 +64,18 @@ def main() -> None:
                 entry['log_tail'] = stream.read().decode(errors='replace')
         spectrum = directory / 'spectra.jsonl'
         entry['spectra_bytes'] = spectrum.stat().st_size if spectrum.exists() else 0
+        entry['spectra'] = []
+        if spectrum.exists():
+            for line in spectrum.read_text().splitlines():
+                try:
+                    entry['spectra'].append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
         runs.append(entry)
     guards = [last_record(path) for path in root.glob('bootstrap-*.jsonl')]
     result = {'timestamp': time.time(), 'disk': disk, 'bootstrap_guards': guards, 'runs': runs,
               'selections': [json.loads(p.read_text()) for p in sorted(root.glob('selected-*.json'))],
+              'summary': json.loads((root / 'campaign-results.json').read_text()) if (root / 'campaign-results.json').exists() else None,
               'failures': [json.loads(p.read_text()) for p in root.glob('STOP*.json')]}
     payload = json.dumps(result).encode()
     compressed = base64.b64encode(gzip.compress(payload)).decode()
