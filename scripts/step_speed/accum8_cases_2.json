@@ -1,0 +1,107 @@
+[
+  {
+    "method": "adamw",
+    "rank": 2,
+    "batch": 16
+  },
+  {
+    "method": "muon_on_lora",
+    "rank": 2,
+    "batch": 16
+  },
+  {
+    "method": "riemannion_original",
+    "rank": 2,
+    "batch": 16
+  },
+  {
+    "method": "lora_muon",
+    "rank": 2,
+    "batch": 16
+  },
+  {
+    "method": "tsd_tau1",
+    "rank": 2,
+    "batch": 16
+  },
+  {
+    "method": "tsd_tau3",
+    "rank": 2,
+    "batch": 16
+  },
+  {
+    "method": "tsd_tau5",
+    "rank": 2,
+    "batch": 16
+  },
+  {
+    "method": "adamw",
+    "rank": 8,
+    "batch": 16
+  },
+  {
+    "method": "muon_on_lora",
+    "rank": 8,
+    "batch": 16
+  },
+  {
+    "method": "riemannion_original",
+    "rank": 8,
+    "batch": 16
+  },
+  {
+    "method": "lora_muon",
+    "rank": 8,
+    "batch": 16
+  },
+  {
+    "method": "tsd_tau1",
+    "rank": 8,
+    "batch": 16
+  },
+  {
+    "method": "tsd_tau3",
+    "rank": 8,
+    "batch": 16
+  },
+  {
+    "method": "tsd_tau5",
+    "rank": 8,
+    "batch": 16
+  },
+  {
+    "method": "adamw",
+    "rank": 32,
+    "batch": 16
+  },
+  {
+    "method": "muon_on_lora",
+    "rank": 32,
+    "batch": 16
+  },
+  {
+    "method": "riemannion_original",
+    "rank": 32,
+    "batch": 16
+  },
+  {
+    "method": "lora_muon",
+    "rank": 32,
+    "batch": 16
+  },
+  {
+    "method": "tsd_tau1",
+    "rank": 32,
+    "batch": 16
+  },
+  {
+    "method": "tsd_tau3",
+    "rank": 32,
+    "batch": 16
+  },
+  {
+    "method": "tsd_tau5",
+    "rank": 32,
+    "batch": 16
+  }
+]

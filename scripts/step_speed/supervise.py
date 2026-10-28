@@ -28,7 +28,7 @@ def execute(case: dict, args, model_path: Path, root: Path, state: dict,
     case_dir = root / name
     guard(pending_write_bytes=10_000_000, reason="before_case", write_path=root)
     case_dir.mkdir(exist_ok=False)
-    microbatch = case["batch"] if args.capacity_probe or case["batch"] <= 32 else args.microbatch_cap
+    microbatch = case["batch"] if args.capacity_probe or case["batch"] <= args.direct_batch_max else args.microbatch_cap
     command = [sys.executable, "-u", str(Path(__file__).with_name("benchmark.py")),
                "--method", case["method"], "--rank", str(case["rank"]),
                "--batch", str(case["batch"]), "--microbatch", str(microbatch),
@@ -72,6 +72,7 @@ def main() -> None:
     parser.add_argument("--shard", type=int, choices=range(4), default=0)
     parser.add_argument("--capacity-probe", action="store_true")
     parser.add_argument("--microbatch-cap", type=int, choices=[1, 2, 4, 8, 16, 32], default=32)
+    parser.add_argument("--direct-batch-max", type=int, choices=[1, 2, 4, 8, 16, 32], default=32)
     parser.add_argument("--cases-file")
     args = parser.parse_args()
     root = Path(os.environ["SPEED_ROOT"])
