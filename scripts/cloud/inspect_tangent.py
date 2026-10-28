@@ -41,7 +41,7 @@ def main() -> None:
             continue
         entry = {'run_name': directory.name}
         for key, filename in [('process', 'process.json'), ('result', 'result.json'),
-                              ('config', 'config.json')]:
+                              ('config', 'config.json'), ('gpu_before_train', 'gpu-before-train.json')]:
             path = directory / filename
             if path.exists():
                 entry[key] = json.loads(path.read_text())

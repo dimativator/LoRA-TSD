@@ -130,7 +130,9 @@ def main() -> None:
                           "--format=csv,noheader"], capture_output=True, text=True, timeout=15)
     processes = subprocess.run(["nvidia-smi", "--query-compute-apps=gpu_uuid,pid,used_memory",
                                 "--format=csv,noheader"], capture_output=True, text=True, timeout=15)
-    print("TANGENT_GPU_BEFORE_TRAIN " + json.dumps({"gpus": gpu.stdout, "processes": processes.stdout}), flush=True)
+    gpu_inventory = {"gpus": gpu.stdout, "processes": processes.stdout, "timestamp": time.time()}
+    (run / "gpu-before-train.json").write_text(json.dumps(gpu_inventory, indent=2) + "\n")
+    print("TANGENT_GPU_BEFORE_TRAIN " + json.dumps(gpu_inventory), flush=True)
     if torch.cuda.device_count() != 1:
         raise RuntimeError("Exactly one visible GPU is required")
     from huggingface_hub import snapshot_download
