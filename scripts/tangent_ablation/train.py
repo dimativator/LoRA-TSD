@@ -20,6 +20,7 @@ from main import build_model, initialize_subspace, set_seed
 from disk_guard import DiskGuard
 from optimizer_presets import GenerationSchedule, generation_config, gradient_norm
 from optimizer import TangentAblation
+from initialization import initial_factors
 
 _data_spec = importlib.util.spec_from_file_location("tangent_data", Path(__file__).with_name("data.py"))
 _data_module = importlib.util.module_from_spec(_data_spec)
@@ -154,11 +155,15 @@ def main() -> None:
         tokenizer, args.dataset, args.seed, 8, data_dir, guard, args.eval_max_samples)
     (run / "data-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     guard(reason="before_loi_initialization")
-    initialize_subspace(config, model, loader)
+    initialization = initial_factors(
+        campaign, config, groups, lambda: initialize_subspace(config, model, loader), guard)
     initial_adapter_sha256 = adapter_digest(groups)
+    if initial_adapter_sha256 != initialization["adapter_sha256"]:
+        raise RuntimeError("Loaded model factors differ from shared initial factor cache")
     (run / "initialization.json").write_text(json.dumps({
         "adapter_sha256": initial_adapter_sha256, "seed": args.seed,
         "method": "LOI RSVD q15 scale0", "rsvd_batches": 31,
+        "cache": initialization,
     }, indent=2) + "\n")
     set_seed(args.seed)
     loader.generator.manual_seed(args.seed)
