@@ -72,6 +72,7 @@ def main() -> None:
     parser.add_argument("--shard", type=int, choices=range(4), default=0)
     parser.add_argument("--capacity-probe", action="store_true")
     parser.add_argument("--microbatch-cap", type=int, choices=[1, 2, 4, 8, 16, 32], default=32)
+    parser.add_argument("--cases-file")
     args = parser.parse_args()
     root = Path(os.environ["SPEED_ROOT"])
     guard = DiskGuard(root, f"speed-shard-{args.shard}")
@@ -81,6 +82,15 @@ def main() -> None:
     if queue_path.exists():
         raise FileExistsError("Refusing duplicate queue: " + str(queue_path))
     cases = grid(args.shard)
+    if args.cases_file:
+        if args.capacity_probe:
+            raise ValueError("An explicit case list cannot be combined with the capacity probe")
+        cases = json.loads(Path(args.cases_file).read_text())
+        allowed = {case_name(case) for shard in range(4) for case in grid(shard)}
+        if (not cases or len({case_name(case) for case in cases}) != len(cases)
+                or any(set(case) != {"method", "rank", "batch"} or case_name(case) not in allowed
+                       for case in cases)):
+            raise ValueError("Explicit cases must be unique configurations from the original grid")
     state = {"shard": args.shard, "started_at": time.time(), "pid": os.getpid(),
              "hostname": os.environ.get("HOSTNAME"), "status": "staging_model",
              "expected_cases": None if args.capacity_probe else len(cases), "results": [],
