@@ -1,0 +1,116 @@
+{
+  "boolq": {
+    "repo": "google/boolq",
+    "config": "default",
+    "revision": "d89fc6ef4da46f056176dcf941ba670524ab1c87",
+    "splits": {
+      "train": [
+        {
+          "filename": "default/train/0000.parquet",
+          "bytes": 3685146
+        }
+      ],
+      "validation": [
+        {
+          "filename": "default/validation/0000.parquet",
+          "bytes": 1257630
+        }
+      ]
+    }
+  },
+  "piqa": {
+    "repo": "ybisk/piqa",
+    "config": "plain_text",
+    "revision": "142c51238b3ca2bc61e9a075913871b8b600e8e1",
+    "splits": {
+      "train": [
+        {
+          "filename": "plain_text/train/0000.parquet",
+          "bytes": 2657677
+        }
+      ],
+      "validation": [
+        {
+          "filename": "plain_text/validation/0000.parquet",
+          "bytes": 301200
+        }
+      ]
+    }
+  },
+  "siqa": {
+    "repo": "allenai/social_i_qa",
+    "config": "default",
+    "revision": "537a2ec8ec565adc0b70b70752893e59e024df26",
+    "splits": {
+      "train": [
+        {
+          "filename": "default/train/0000.parquet",
+          "bytes": 3475355
+        }
+      ],
+      "validation": [
+        {
+          "filename": "default/validation/0000.parquet",
+          "bytes": 203280
+        }
+      ]
+    }
+  },
+  "obqa": {
+    "repo": "allenai/openbookqa",
+    "config": "main",
+    "revision": "ff32d06f3b17a43c2042765b39a22ba55a0d41f9",
+    "splits": {
+      "train": [
+        {
+          "filename": "main/train/0000.parquet",
+          "bytes": 495845
+        }
+      ],
+      "validation": [
+        {
+          "filename": "main/validation/0000.parquet",
+          "bytes": 58233
+        }
+      ]
+    }
+  },
+  "qnli": {
+    "repo": "SetFit/qnli",
+    "config": "default",
+    "revision": "b527965e0f4a32f9aa1e06327c0eaf4ed5c92d6d",
+    "splits": {
+      "train": [
+        {
+          "filename": "default/train/0000.parquet",
+          "bytes": 17585373
+        }
+      ],
+      "validation": [
+        {
+          "filename": "default/validation/0000.parquet",
+          "bytes": 874959
+        }
+      ]
+    }
+  },
+  "multi_nli": {
+    "repo": "nyu-mll/multi_nli",
+    "config": "default",
+    "revision": "d6551022f184031474f8f9cc1bb794f28d7eb3b3",
+    "splits": {
+      "train": [
+        {
+          "filename": "default/train/0000.parquet",
+          "bytes": 213961663
+        }
+      ],
+      "validation_matched": [
+        {
+          "filename": "default/validation_matched/0000.parquet",
+          "bytes": 4938568
+        }
+      ]
+    }
+  }
+}
