@@ -164,10 +164,13 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-length", type=int, default=512)
+    parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--methods", nargs="+", choices=available_methods, default=list(METHODS))
     args = parser.parse_args()
     if args.max_length <= 0:
         parser.error("max-length must be positive")
+    if args.steps < 2:
+        parser.error("steps must be at least two for the two-update smoke")
     if len(args.methods) != len(set(args.methods)):
         parser.error("Optimizer methods must occur only once")
     methods = tuple(args.methods)
@@ -193,6 +196,7 @@ def main() -> None:
     tokenizer_cache = data_dir / "tokenizer-cache"
     result = {"status": "running", "timestamp": time.time(), "datasets": {},
               "methods": list(methods), "max_length": args.max_length,
+              "production_steps": args.steps,
               "checkpoints": False, "nfs2_accessed": False,
               "optimizer_losses": {}, "optimizer_smoke_rsvd_q": 1,
               "production_rsvd_q": 15, "optimizer_smoke_steps": 2}
@@ -237,9 +241,13 @@ def main() -> None:
                 result["length_violations"] = violations
                 raise ValueError("Native chat exceeds configured sequence length; no GPU launch: " +
                                  json.dumps(violations, separators=(",", ":")))
-            checks = optimizer_smoke(methods)
+            checks = optimizer_smoke(methods, steps=args.steps)
             if set(checks) != set(methods):
                 raise AssertionError("Optimizer smoke results must match the requested methods")
+            result["optimizer_preset_steps"] = {
+                method: checks[method]["preset"]["steps"] for method in methods}
+            if any(steps != args.steps for steps in result["optimizer_preset_steps"].values()):
+                raise AssertionError("Optimizer presets must use the requested production steps")
             result["optimizer_losses"] = {method: checks[method]["losses"] for method in methods}
             result["optimizer_checks"] = {
                 method: {key: value for key, value in checks[method].items() if key not in {"preset", "losses"}}
@@ -249,6 +257,7 @@ def main() -> None:
             result.update(status="failed", error=str(error))
             path = save_result(directory, result, guard)
             print("GEN_CPU_SMOKE " + json.dumps({"status": "failed", "methods": list(methods),
+                                                 "production_steps": args.steps,
                                                  "error": str(error),
                                                  "result_path": str(path),
                                                  "token_lengths": {key: value["token_lengths"]

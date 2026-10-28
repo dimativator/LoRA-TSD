@@ -21,11 +21,13 @@ from optimizer_presets import (METHODS, GenerationSchedule, enable_fixed_origina
                                optimizer_parameters)
 
 
-def optimizer_smoke(methods=METHODS) -> dict:
+def optimizer_smoke(methods=METHODS, steps: int = 3000) -> dict:
+    if steps < 2:
+        raise ValueError("Production steps must be at least two for the two-update smoke")
     results = {}
     for method in methods:
         torch.manual_seed(42)
-        config = generation_config(method, "smoke", 3000, "/tmp/smoke", 2, 16)
+        config = generation_config(method, "smoke", steps, "/tmp/smoke", 2, 16)
         tiny = LlamaForCausalLM(LlamaConfig(vocab_size=128, hidden_size=64,
                                            intermediate_size=128, num_hidden_layers=1,
                                            num_attention_heads=4, num_key_value_heads=2))
@@ -86,6 +88,7 @@ def optimizer_smoke(methods=METHODS) -> dict:
         assert any(not torch.equal(before, after) for before, after in zip(original, parameters)), method
         results[method] = {"losses": losses, "lr_used": lrs, "parameters_changed": True,
                            "auxiliary_gradient_norm": auxiliary_gradient,
+                           "production_steps": config["steps"],
                            "preset": config}
     return results
 
