@@ -42,7 +42,7 @@ def main() -> None:
     shutil.copytree(source, model_path)
     cases = grid(args.shard)
     if args.single:
-        cases = [{"method": "tsd_tau5", "rank": 16, "batch": 1}]
+        cases = [{"method": "tsd_tau5", "rank": 16, "batch": 64}]
     state = {"shard": args.shard, "started_at": time.time(), "pid": os.getpid(),
              "hostname": os.environ.get("HOSTNAME"), "status": "running",
              "expected_cases": len(cases), "results": [], "current": None,

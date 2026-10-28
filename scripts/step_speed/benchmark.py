@@ -30,14 +30,15 @@ from tsd.lora_tsd_efficient import LoRATSDEfficient
 METHODS = ("adamw", "muon_on_lora", "riemannion_original", "lora_muon",
            "tsd_tau1", "tsd_tau3", "tsd_tau5")
 RANKS = (1, 2, 4, 8, 16, 32)
-BATCHES = (1, 2, 4, 8, 16, 32, 64, 128)
+BATCHES = (64, 128)
+MICROBATCH = 32
 
 
 def grid(shard: int, shards: int = 4) -> list[dict]:
     cases = []
     for ri, rank in enumerate(RANKS):
         for bi, batch in enumerate(BATCHES):
-            if (ri + bi) % shards != shard:
+            if (ri + 2 * bi) % shards != shard:
                 continue
             # Rotate method order to avoid always timing TSD last.
             offset = (ri + bi) % len(METHODS)
@@ -135,15 +136,30 @@ def build(case: dict, model_path: str | None, device: str = "cuda") -> tuple:
     return model, optimizer, params
 
 
-def step(model, optimizer, params: list, batch: dict) -> torch.Tensor:
-    device_batch = {key: value.to(next(model.parameters()).device, non_blocking=True)
-                    for key, value in batch.items()}
-    loss = model(**device_batch).loss
-    loss.backward()
+def backward_accumulated(model, batch: dict, accumulation: int) -> torch.Tensor:
+    """Backpropagate mean loss in equal-sized microbatches without retaining graphs."""
+    batch_size = batch["input_ids"].shape[0]
+    if accumulation < 1 or batch_size % accumulation:
+        raise ValueError("Effective batch must be divisible by accumulation")
+    microbatch = batch_size // accumulation
+    device = next(model.parameters()).device
+    total_loss = None
+    for start in range(0, batch_size, microbatch):
+        device_batch = {key: value[start:start + microbatch].to(device, non_blocking=True)
+                        for key, value in batch.items()}
+        loss = model(**device_batch).loss / accumulation
+        loss.backward()
+        detached = loss.detach()
+        total_loss = detached if total_loss is None else total_loss + detached
+    return total_loss
+
+
+def step(model, optimizer, params: list, batch: dict, accumulation: int = 1) -> torch.Tensor:
+    loss = backward_accumulated(model, batch, accumulation)
     torch.nn.utils.clip_grad_norm_(params, 1., foreach=True)
     optimizer.step()
     optimizer.zero_grad(set_to_none=True)
-    return loss.detach()
+    return loss
 
 
 def stats(values: list[float]) -> dict:
@@ -165,8 +181,11 @@ def measure(args: argparse.Namespace) -> dict:
     ids = torch.randint(4, model.config.vocab_size, (args.batch, args.length), generator=gen)
     batch = {"input_ids": ids.pin_memory(), "labels": ids.clone().pin_memory(),
              "attention_mask": torch.ones_like(ids).pin_memory()}
+    if args.batch % args.microbatch:
+        raise ValueError("Effective batch must be divisible by microbatch")
+    accumulation = args.batch // args.microbatch
     for _ in range(args.warmup):
-        loss = step(model, optimizer, params, batch)
+        loss = step(model, optimizer, params, batch, accumulation)
     torch.cuda.synchronize()
     if not torch.isfinite(loss).item():
         raise RuntimeError("Nonfinite warmup loss")
@@ -176,7 +195,7 @@ def measure(args: argparse.Namespace) -> dict:
         torch.cuda.synchronize()
         started = time.perf_counter()
         for _ in range(args.steps_per_window):
-            loss = step(model, optimizer, params, batch)
+            loss = step(model, optimizer, params, batch, accumulation)
         torch.cuda.synchronize()
         elapsed = time.perf_counter() - started
         if not torch.isfinite(loss).item():
@@ -190,8 +209,7 @@ def measure(args: argparse.Namespace) -> dict:
     # main full-step measurement. It includes the optimizer's CPU launch cost.
     optimizer_seconds = []
     for _ in range(5):
-        device_batch = {key: value.to("cuda", non_blocking=True) for key, value in batch.items()}
-        model(**device_batch).loss.backward()
+        backward_accumulated(model, batch, accumulation)
         torch.nn.utils.clip_grad_norm_(params, 1., foreach=True)
         torch.cuda.synchronize()
         started = time.perf_counter()
@@ -219,12 +237,11 @@ def smoke() -> dict:
     records = []
     for rank in (1, 32):
         for method in METHODS:
-            case = {"method": method, "rank": rank, "batch": 2}
+            case = {"method": method, "rank": rank, "batch": 64}
             model, optimizer, params = build(case, None, "cpu")
-            ids = torch.randint(4, 256, (2, 16))
-            for iteration in range(2):
-                loss = model(input_ids=ids, labels=ids).loss
-                loss.backward()
+            for iteration, accumulation in enumerate((2, 4)):
+                ids = torch.randint(4, 256, (MICROBATCH * accumulation, 16))
+                loss = backward_accumulated(model, {"input_ids": ids, "labels": ids}, accumulation)
                 if method == "riemannion_original" and iteration == 0:
                     auxiliary = [module.lora_A.weight.grad[rank:].norm() for module in model.modules()
                                  if isinstance(module, RiemannianLoRALinear)]
@@ -239,7 +256,9 @@ def smoke() -> dict:
                     if isinstance(module, RiemannianLoRALinear):
                         assert module.tangent_forward
                         assert module.lora_A.weight.grad is None
-            records.append({**case, "loss": loss.item(), "optimizer": type(optimizer).__name__})
+            records.append({**case, "microbatch": MICROBATCH, "tested_accumulation": [2, 4],
+                            "tested_effective_batches": [64, 128],
+                            "loss": loss.item(), "optimizer": type(optimizer).__name__})
     return {"status": "passed", "cases": records}
 
 
@@ -249,6 +268,7 @@ def main() -> None:
     parser.add_argument("--method", choices=METHODS)
     parser.add_argument("--rank", type=int)
     parser.add_argument("--batch", type=int)
+    parser.add_argument("--microbatch", type=int, default=MICROBATCH)
     parser.add_argument("--model-path")
     parser.add_argument("--output")
     parser.add_argument("--length", type=int, default=512)
@@ -274,10 +294,14 @@ def main() -> None:
                   ended_at=time.time(), pid=os.getpid(), seed=42,
                   model="meta-llama/Llama-3.2-1B-Instruct", base_dtype="bfloat16",
                   adapter_dtype="float32", attention="sdpa", tf32=False,
-                  gradient_accumulation=1, global_grad_clip=1., lora_alpha=args.rank,
+                  microbatch=args.microbatch, effective_batch=args.batch,
+                  gradient_accumulation=args.batch // args.microbatch,
+                  loss_normalization="mean of equally sized microbatch losses",
+                  clipping_frequency="once after all microbatch backward passes",
+                  global_grad_clip=1., lora_alpha=args.rank,
                   dropout=.05, targets=["q_proj", "k_proj", "v_proj"], checkpoints=False,
                   initialization="same nonzero rank-r perturbation: 1e-4 U V^T; initialization excluded",
-                  measurement="3 synchronized windows of10 full steps; H2D/forward/backward/clip/update/zero",
+                  measurement="3 synchronized windows of10 optimizer updates; accumulated H2D/forward/backward, then one clip/update/zero",
                   optimizer_measurement="separate five-step diagnostic pass, synchronized around optimizer.step",
                   source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
     destination = Path(args.output)
