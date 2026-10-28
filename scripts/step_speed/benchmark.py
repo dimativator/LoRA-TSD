@@ -26,11 +26,12 @@ from optimizers.lora_muon import LoRAMuon
 from optimizers.lora_muon_manifold import LoRAMuonManifold
 from optimizers.riemannion_original import RiemannionOriginal
 from tsd.lora_tsd_efficient import LoRATSDEfficient
+from model_storage import SPEC, memory_before_load
 
 METHODS = ("adamw", "muon_on_lora", "riemannion_original", "lora_muon",
            "tsd_tau1", "tsd_tau3", "tsd_tau5")
 RANKS = (1, 2, 4, 8, 16, 32)
-BATCHES = (64, 128)
+BATCHES = (1, 2, 4, 8, 16, 32, 64, 128)
 MICROBATCH = 32
 
 
@@ -38,7 +39,7 @@ def grid(shard: int, shards: int = 4) -> list[dict]:
     cases = []
     for ri, rank in enumerate(RANKS):
         for bi, batch in enumerate(BATCHES):
-            if (ri + 2 * bi) % shards != shard:
+            if (ri + bi) % shards != shard:
                 continue
             # Rotate method order to avoid always timing TSD last.
             offset = (ri + bi) % len(METHODS)
@@ -173,6 +174,7 @@ def measure(args: argparse.Namespace) -> dict:
     torch.set_num_threads(8)
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
+    preload_memory = memory_before_load()
     model, optimizer, params = build(case, args.model_path)
     if args.gradient_checkpointing:
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
@@ -208,7 +210,7 @@ def measure(args: argparse.Namespace) -> dict:
     # Separate diagnostic pass avoids synchronization/event overhead in the
     # main full-step measurement. It includes the optimizer's CPU launch cost.
     optimizer_seconds = []
-    for _ in range(5):
+    for _ in range(args.optimizer_diagnostic_steps):
         backward_accumulated(model, batch, accumulation)
         torch.nn.utils.clip_grad_norm_(params, 1., foreach=True)
         torch.cuda.synchronize()
@@ -221,12 +223,13 @@ def measure(args: argparse.Namespace) -> dict:
                                "--format=csv,noheader"], capture_output=True, text=True, check=True).stdout.strip()
     properties = torch.cuda.get_device_properties(0)
     return {**case, "status": "completed", "full_step_seconds": stats(windows),
-            "optimizer_seconds": stats(optimizer_seconds),
+            "optimizer_seconds": stats(optimizer_seconds) if optimizer_seconds else None,
             "tokens_per_second": args.batch * args.length / statistics.mean(windows),
             "supervised_tokens_per_second": args.batch * (args.length - 1) / statistics.mean(windows),
             "peak_allocated_bytes": peak_allocated, "peak_reserved_bytes": peak_reserved,
             "final_loss": loss.item(), "trainable_parameters": sum(p.numel() for p in params),
             "gpu": hardware, "torch": torch.__version__, "cuda": torch.version.cuda,
+            "memory_before_load": preload_memory,
             "allocated_gpu": {"name": properties.name, "total_memory": properties.total_memory,
                               "uuid": str(getattr(properties, "uuid", "unavailable"))},
             "optimizer_class": type(optimizer).__name__}
@@ -275,6 +278,7 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--windows", type=int, default=3)
     parser.add_argument("--steps-per-window", type=int, default=10)
+    parser.add_argument("--optimizer-diagnostic-steps", type=int, default=5)
     parser.add_argument("--gradient-checkpointing", action="store_true")
     args = parser.parse_args()
     if args.smoke:
@@ -292,7 +296,8 @@ def main() -> None:
                   warmup=args.warmup, windows=args.windows, steps_per_window=args.steps_per_window,
                   gradient_checkpointing=args.gradient_checkpointing, started_at=started,
                   ended_at=time.time(), pid=os.getpid(), seed=42,
-                  model="meta-llama/Llama-3.2-1B-Instruct", base_dtype="bfloat16",
+                  model=SPEC["model"], model_revision=SPEC["revision"],
+                  model_weight_bytes=SPEC["weight_bytes"], base_dtype="bfloat16",
                   adapter_dtype="float32", attention="sdpa", tf32=False,
                   microbatch=args.microbatch, effective_batch=args.batch,
                   gradient_accumulation=args.batch // args.microbatch,
@@ -307,7 +312,9 @@ def main() -> None:
     destination = Path(args.output)
     guard = DiskGuard(destination.parent.parent, destination.stem)
     guard(pending_write_bytes=1_000_000, reason="before_result", write_path=destination.parent)
-    destination.write_text(json.dumps(result, indent=2) + "\n")
+    temporary = destination.with_name(destination.name + ".tmp")
+    temporary.write_text(json.dumps(result, indent=2) + "\n")
+    temporary.replace(destination)
     print("SPEED_RESULT " + json.dumps(result), flush=True)
     if result["status"] == "failed":
         raise SystemExit(1)

@@ -64,12 +64,12 @@ def test_one_clip_update_and_clear_per_effective_batch(accumulation):
         torch.testing.assert_close(actual, expected)
 
 
-def test_grid_contains_all84_unique_cases():
+def test_grid_contains_all336_unique_cases():
     shards = [grid(shard) for shard in range(4)]
     names = [case_name(case) for shard in shards for case in shard]
-    assert len(names) == len(set(names)) == 84
-    assert [len(shard) for shard in shards] == [21, 21, 21, 21]
-    assert {case["batch"] for shard in shards for case in shard} == {64, 128}
+    assert len(names) == len(set(names)) == 336
+    assert [len(shard) for shard in shards] == [84, 84, 84, 84]
+    assert {case["batch"] for shard in shards for case in shard} == {1, 2, 4, 8, 16, 32, 64, 128}
 
 
 @pytest.mark.parametrize("accumulation", [0, 3])
