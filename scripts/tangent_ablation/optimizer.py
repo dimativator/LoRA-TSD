@@ -55,7 +55,9 @@ class TangentAblation(LoRATSDEfficient):
 
     def __init__(self, params, variant: str, lr: float = .005,
                  spectrum_path: Path | str | None = None,
-                 spectrum_steps: tuple | list | None = None, **kwargs):
+                 spectrum_steps: tuple | list | None = None, coupled_tau: int = 5, **kwargs):
+        if not isinstance(coupled_tau, int) or coupled_tau < 1:
+            raise ValueError("coupled_tau must be a positive integer")
         if variant not in VARIANTS:
             raise ValueError(f"Unknown variant: {variant}")
         if "ball_iters" in kwargs:
@@ -65,9 +67,10 @@ class TangentAblation(LoRATSDEfficient):
                    "max_delta_norm": .1, "log_optimizer_stats": False}
         options.update(kwargs)
         options["ball_iters"] = {"frobenius": 0, "one_step": 1,
-                                 "factorwise": 0, "coupled": 5}[variant]
+                                 "factorwise": 0, "coupled": coupled_tau}[variant]
         super().__init__(params, **options)
         self.variant = variant
+        self.coupled_tau = coupled_tau
         self.spectrum_path = Path(spectrum_path) if spectrum_path is not None else None
         self.spectrum_steps = set(spectrum_steps if spectrum_steps is not None
                                   else [1, *range(250, 3001, 250)])
@@ -136,6 +139,7 @@ class TangentAblation(LoRATSDEfficient):
                     row = {"timestamp": time.time(), "step": record_step, "variant": self.variant,
                            "group": group.get("name", f"group_{index}"), "group_index": index,
                            "rank": A.shape[0], "lr": group["lr_A"],
+                           "ball_iters": group["ball_iters"], "coupled_tau": self.coupled_tau,
                            **self._pending_spectra[index],
                            "applied_update": spectrum_record(factored_singular_values(left, right))}
                     stream.write(json.dumps(row, allow_nan=False) + "\n")

@@ -28,7 +28,7 @@ _data_spec.loader.exec_module(_data_module)
 build_data = _data_module.build_data
 
 
-def smoke() -> dict:
+def smoke(coupled_tau: int = 5) -> dict:
     """Exercise the real collator, PEFT forward/backward and every direction on CPU."""
     from peft import LoraConfig, get_peft_model
     from tokenizers import Tokenizer
@@ -58,7 +58,7 @@ def smoke() -> dict:
             task_type="CAUSAL_LM", lora_dropout=.05,
         ))
         groups = get_lora_param_groups(model)
-        optimizer = TangentAblation(groups, variant=variant, lr=.005, ns_steps=5,
+        optimizer = TangentAblation(groups, variant=variant, lr=.005, ns_steps=5, coupled_tau=coupled_tau,
                                    use_momentum=True, momentum_cf=.95, balance=True,
                                    max_delta_norm=.1, log_optimizer_stats=False)
         losses = []
@@ -71,7 +71,8 @@ def smoke() -> dict:
             gradient_norm([p for g in groups for p in g["params"]], 1.)
             optimizer.step()
             losses.append(float(loss.detach()))
-        cases.append({"variant": variant, "updates": 2, "losses": losses})
+        cases.append({"variant": variant, "updates": 2, "losses": losses,
+                      "ball_iters": optimizer.param_groups[0]["ball_iters"]})
     return {"status": "passed", "cases": cases, "real_sft_collator": True}
 
 
@@ -106,7 +107,10 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--eval-every", type=int, default=250)
     parser.add_argument("--eval-max-samples", type=int)
+    parser.add_argument("--coupled-tau", type=int, default=int(os.environ.get("ABLATION_COUPLED_TAU", "5")))
     args = parser.parse_args()
+    if args.coupled_tau < 1:
+        parser.error("--coupled-tau must be positive")
     if args.lr <= 0 or args.steps <= 0 or args.eval_every <= 0:
         parser.error("LR, steps and evaluation interval must be positive")
     if args.eval_max_samples is not None and args.eval_max_samples <= 0:
@@ -121,7 +125,9 @@ def main() -> None:
           write_path=Path(os.environ["HF_HOME"]))
     config = generation_config("lora_tsd", args.dataset, args.steps, str(run), 8, 1024)
     config.update(seed=args.seed, lr_A=args.lr, lr_B=args.lr, eval_every=args.eval_every,
-                  variant=args.variant, eval_max_samples=args.eval_max_samples,
+                  variant=args.variant, coupled_tau=args.coupled_tau,
+                  ball_iters={"frobenius":0,"one_step":1,"factorwise":0,"coupled":args.coupled_tau}[args.variant],
+                  eval_max_samples=args.eval_max_samples,
                   selection_metric="max validation accuracy at scheduled post-update evaluations",
                   selection_excludes_step0=True, eval_batch_size=8,
                   trainer="tangent_ablation/train.py", loss_weighting="equal microbatch mean, as benchmark",
@@ -155,9 +161,18 @@ def main() -> None:
         tokenizer, args.dataset, args.seed, 8, data_dir, guard, args.eval_max_samples)
     (run / "data-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     guard(reason="before_loi_initialization")
+    initialization_root = Path(os.environ.get("ABLATION_INITIALIZATION_ROOT", str(campaign)))
+    if initialization_root != campaign:
+        source = initialization_root / "initializations" / f"init-{args.dataset}-s{args.seed}.pt"
+        if not source.is_file():
+            raise FileNotFoundError("Required paired initialization is missing: " + str(source))
     initialization = initial_factors(
-        campaign, config, groups, lambda: initialize_subspace(config, model, loader), guard)
+        initialization_root, config, groups, lambda: initialize_subspace(config, model, loader), guard)
     initial_adapter_sha256 = adapter_digest(groups)
+    if initialization_root != campaign:
+        expected = json.loads(Path(__file__).with_name("expected_initializations.json").read_text())
+        if initial_adapter_sha256 != expected[f"{args.dataset}:{args.seed}"]:
+            raise RuntimeError("Initial factors do not match the original campaign")
     if initial_adapter_sha256 != initialization["adapter_sha256"]:
         raise RuntimeError("Loaded model factors differ from shared initial factor cache")
     (run / "initialization.json").write_text(json.dumps({
@@ -175,7 +190,7 @@ def main() -> None:
     if args.steps not in spectrum_steps:
         spectrum_steps.append(args.steps)
     optimizer = TangentAblation(
-        groups, variant=args.variant, lr=args.lr, spectrum_path=run / "spectra.jsonl",
+        groups, variant=args.variant, lr=args.lr, coupled_tau=args.coupled_tau, spectrum_path=run / "spectra.jsonl",
         spectrum_steps=spectrum_steps, ns_steps=5, use_momentum=True, momentum_cf=.95,
         balance=True, balance_mode="norm", rebalance_every=1,
         max_delta_norm=.1, log_optimizer_stats=False,
@@ -242,6 +257,7 @@ def main() -> None:
     best = max(evaluations, key=lambda item: item["accuracy"])
     result = {"status": "completed", "dataset": args.dataset, "variant": args.variant,
               "lr": args.lr, "seed": args.seed, "steps": args.steps,
+              "coupled_tau": args.coupled_tau, "ball_iters": optimizer.param_groups[0]["ball_iters"],
               "eval_every": args.eval_every, "best_score": best["accuracy"],
               "best_step": best["step"], "evaluations": evaluations,
               "initial_adapter_sha256": initial_adapter_sha256,

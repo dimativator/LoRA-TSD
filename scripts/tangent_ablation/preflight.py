@@ -9,6 +9,8 @@ import sys
 import time
 
 from train import smoke, _data_module
+from initialization import factor_digest
+import torch
 from disk_guard import DiskGuard
 from huggingface_hub import HfApi, try_to_load_from_cache
 
@@ -39,9 +41,24 @@ def main() -> None:
     print(tests.stdout + tests.stderr, flush=True)
     if tests.returncode:
         raise RuntimeError('Optimizer numerical tests failed')
+    queue_tests = subprocess.run([sys.executable, str(Path(__file__).with_name('test_tau3_queue.py'))],
+                                 capture_output=True, text=True, timeout=60)
+    print(queue_tests.stdout + queue_tests.stderr, flush=True)
+    if queue_tests.returncode:
+        raise RuntimeError('Tau3 queue tests failed')
+    expected = json.loads(Path(__file__).with_name('expected_initializations.json').read_text())
+    source = Path(os.environ['ABLATION_INITIALIZATION_ROOT'])
+    reused = []
+    for case, digest in expected.items():
+        dataset, seed = case.split(':')
+        path = source / 'initializations' / f'init-{dataset}-s{seed}.pt'
+        payload = torch.load(path, map_location='cpu', weights_only=True)
+        assert factor_digest(payload['factors']) == payload['adapter_sha256'] == digest
+        reused.append({'dataset':dataset,'seed':int(seed),'sha256':digest,'path':str(path)})
     result = {'status': 'passed', 'timestamp': time.time(), 'disk': disk, 'nfs2': nfs2,
               'model': model, 'model_revision': info.sha, 'model_files': files,
-              'data': data, 'optimizer_tests': 'passed', 'smoke': smoke(), 'checkpoints': False}
+              'data': data, 'optimizer_tests': 'passed', 'smoke': smoke(coupled_tau=int(os.environ.get('ABLATION_COUPLED_TAU','5'))),
+              'paired_initializations':reused, 'coupled_tau':int(os.environ.get('ABLATION_COUPLED_TAU','5')), 'checkpoints': False}
     guard(pending_write_bytes=1_000_000, reason='before_preflight_result')
     (root / 'preflight.json').write_text(json.dumps(result, indent=2) + '\n')
     print('ABLATION_PREFLIGHT ' + json.dumps(result), flush=True)

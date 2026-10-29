@@ -16,7 +16,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts/generation'))
 from disk_guard import DiskGuard
 
-VARIANTS = ('frobenius', 'one_step', 'factorwise', 'coupled')
+VARIANTS = tuple(os.environ.get("ABLATION_VARIANTS", "frobenius,one_step,factorwise,coupled").split(","))
+if not VARIANTS or not set(VARIANTS).issubset({"frobenius", "one_step", "factorwise", "coupled"}):
+    raise ValueError("Invalid ABLATION_VARIANTS")
 LRS = (0.001, 0.003, 0.005, 0.01)
 SEEDS = (42, 0, 1)
 
@@ -79,9 +81,9 @@ def run_case(root: Path, case: dict, worker: str) -> None:
     command = [sys.executable, '-u', str(Path(__file__).with_name('train.py')),
                '--variant', case['variant'], '--dataset', case['dataset'], '--lr', str(case['lr']),
                '--seed', str(case['seed']), '--steps', '3000', '--eval-every', '250',
-               '--output-dir', str(run)]
+               '--output-dir', str(run), '--coupled-tau', os.environ.get('ABLATION_COUPLED_TAU', '5')]
     record = {**case, 'run_name': run.name, 'worker': worker, 'job_id': os.environ.get('HOSTNAME'),
-              'command': command, 'status': 'starting', 'started_at': time.time(), 'checkpoints': False}
+              'command': command, 'coupled_tau': int(os.environ.get('ABLATION_COUPLED_TAU', '5')), 'status': 'starting', 'started_at': time.time(), 'checkpoints': False}
     atomic_json(run / 'process.json', record)
     with (run / 'train.log').open('w', buffering=1) as log:
         child = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
@@ -118,6 +120,7 @@ def summarize(root: Path) -> dict:
                                 'best_step': result.get('best_step'), 'run': name(case)})
             scores = [record['best_score'] for record in results]
             rows.append({'variant': variant, 'dataset': dataset, 'lr': selected['lr'],
+                         'coupled_tau': int(os.environ.get('ABLATION_COUPLED_TAU', '5')),
                          'mean_best_accuracy': statistics.mean(scores),
                          'sample_std_best_accuracy': statistics.stdev(scores), 'seeds': results})
     return {'status': 'completed', 'timestamp': time.time(), 'rows': rows,

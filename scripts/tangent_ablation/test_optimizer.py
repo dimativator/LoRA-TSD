@@ -49,6 +49,23 @@ class OptimizerTests(unittest.TestCase):
             direction = project(rectangular_sign(direction))
         return direction
 
+    def test_tau3_matches_existing_optimizer(self):
+        pairs = [(torch.nn.Parameter(self.A.clone()), torch.nn.Parameter(self.B.clone()))
+                 for _ in range(2)]
+        reference = LoRATSDEfficient([{"params": list(pairs[0])}], lr_A=.005, lr_B=.005,
+                                     momentum_cf=.95, ns_steps=5, ball_iters=3, balance=True,
+                                     max_delta_norm=.1, log_optimizer_stats=False)
+        tested = TangentAblation([{"params": list(pairs[1])}], "coupled", coupled_tau=3)
+        self.assertEqual(tested.param_groups[0]["ball_iters"], 3)
+        for _ in range(3):
+            for A, B in pairs:
+                A.grad = B.detach().t() @ self.G
+                B.grad = self.G @ A.detach().t()
+            reference.step()
+            tested.step()
+            for expected, actual in zip(pairs[0], pairs[1]):
+                torch.testing.assert_close(actual, expected, atol=0, rtol=0)
+
     def test_tangent_projection_matches_dense_projector(self):
         Q = torch.linalg.qr(self.B, mode="reduced")[0]
         V = torch.linalg.qr(self.A.t(), mode="reduced")[0]
