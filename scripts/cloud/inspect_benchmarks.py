@@ -81,6 +81,22 @@ if os.environ.get('LORA_BENCHMARK_CLEANUP_ARROW') == '1':
 disk = shutil.disk_usage(root)
 print("BENCHMARK_DISK " + json.dumps({"free_bytes": disk.free, "total_bytes": disk.total}))
 
-for directory in [root, Path("/home/jovyan/lora-1b-benchmark-data-20261014"), Path("/home/jovyan/.cache/huggingface")]:
+for directory in [root]:
     result = subprocess.run(["du", "-sk", str(directory)], capture_output=True, text=True, timeout=30)
     print("BENCHMARK_STORAGE " + json.dumps({"path": str(directory), "du": result.stdout.strip(), "returncode": result.returncode}))
+
+for path in sorted(root.glob('disk-guard-worker*.jsonl')):
+    with path.open() as stream:
+        tail = list(deque(stream, maxlen=2))
+    records = []
+    for line in tail:
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    print('BENCHMARK_WORKER_STORAGE ' + json.dumps({'worker': path.stem, 'records': records}), flush=True)
+marker = root / 'STOP_STORAGE.json'
+print('BENCHMARK_STORAGE_STOP ' + json.dumps({'present': marker.exists(), 'details': marker.read_text() if marker.exists() else None}), flush=True)
+for path in sorted(root.glob('*/run.json')):
+    state = json.loads(path.read_text())
+    print('BENCHMARK_RUN_STATE ' + json.dumps({'name': state['name'], 'worker': state.get('worker'), 'command': state['command'], 'returncode': state.get('returncode')}), flush=True)
