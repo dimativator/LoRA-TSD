@@ -2,6 +2,7 @@ import torch
 from torch.optim import Optimizer
 
 from .utils import *
+from .retractions import RETRACTIONS, retract_lora
 
 
 @torch.no_grad()
@@ -114,8 +115,12 @@ class LoRATSD(Optimizer):
         log_f_inner: bool = False,
         log_grads: bool = False,
         log_optimizer_stats: bool = True,
+        retraction: str = "factor",
     ):
+        if retraction not in RETRACTIONS:
+            raise ValueError(f"Unknown retraction: {retraction}")
         defaults = dict(
+            retraction=retraction,
             norm_ord=norm_ord,
             lr_A=lr_A,
             lr_B=lr_B,
@@ -225,6 +230,37 @@ class LoRATSD(Optimizer):
         else:
             raise ValueError(f"Unknown balance_mode: {self.balance_mode}")
 
+    def _prepare_bases(
+        self, A: torch.Tensor, B: torch.Tensor, G_A: torch.Tensor,
+        G_B: torch.Tensor, group: dict,
+    ) -> tuple:
+        U_B = torch.linalg.qr(B, mode="reduced")[0]
+        V_A = torch.linalg.qr(A.t(), mode="reduced")[0]
+        return U_B, V_A, None
+
+    def _spectral_step(
+        self, L: torch.Tensor, R: torch.Tensor, U_B: torch.Tensor,
+        V_A: torch.Tensor, group: dict, bases: tuple | None,
+    ) -> tuple:
+        for _ in range(group["ball_iters"]):
+            Q_L, R_L = torch.linalg.qr(L, mode="reduced")
+            Q_R, R_R = torch.linalg.qr(R.t(), mode="reduced")
+            T_orth = _ns_sq(R_L @ R_R.t(), steps=group["ns_steps"])
+            L, R = _proj_T_factored(Q_L @ T_orth, Q_R.t(), U_B, V_A)
+        GLL = L.t() @ L
+        GRR = R @ R.t()
+        X_fro = (GLL * GRR).sum().clamp_min(0).sqrt()
+        return L, R, X_fro
+
+    def _clip_deltas(
+        self, dA: torch.Tensor, dB: torch.Tensor, dW_norm: torch.Tensor,
+        max_delta_norm: float,
+    ) -> None:
+        if dW_norm > max_delta_norm:
+            scale = max_delta_norm / dW_norm
+            dA.mul_(scale)
+            dB.mul_(scale)
+
     @torch.no_grad()
     def step(self, closure=None):
         loss = None
@@ -292,8 +328,9 @@ class LoRATSD(Optimizer):
             lr_A = group["lr_A"]
             lr_B = group["lr_B"]
 
-            U_B = torch.linalg.qr(B32, mode="reduced")[0]
-            V_A = torch.linalg.qr(A32.t(), mode="reduced")[0]
+            U_B, V_A, bases = self._prepare_bases(
+                A32, B32, G_A32, G_B32, group,
+            )
             BtB_i = _spd_inv(B32.t() @ B32, group["ridge_eps"])
             AAt_i = _spd_inv(A32 @ A32.t(), group["ridge_eps"])
 
@@ -313,17 +350,9 @@ class LoRATSD(Optimizer):
                 f_start = None
 
             # Apply msign through the small QR core, then project onto T.
-            ns_steps = group["ns_steps"]
-            L, R = L_g, R_g
-            for _ in range(group["ball_iters"]):
-                Q_L, R_L = torch.linalg.qr(L, mode="reduced")
-                Q_R, R_R = torch.linalg.qr(R.t(), mode="reduced")
-                T_orth = _ns_sq(R_L @ R_R.t(), steps=ns_steps)
-                L, R = _proj_T_factored(Q_L @ T_orth, Q_R.t(), U_B, V_A)
-
-            GLL = L.t() @ L
-            GRR = R @ R.t()
-            X_fro = (GLL * GRR).sum().clamp_min(0).sqrt()
+            L, R, X_fro = self._spectral_step(
+                L_g, R_g, U_B, V_A, group, bases,
+            )
 
             cos_grad = None
             dual_ratio = None
@@ -380,13 +409,16 @@ class LoRATSD(Optimizer):
                 ns_gap_fro = torch.linalg.norm(Nn - Dn, ord="fro").item()
 
             dW_norm = lr_A * X_fro
-            if dW_norm > group["max_delta_norm"]:
-                scale = group["max_delta_norm"] / dW_norm
-                dA32.mul_(scale)
-                dB32.mul_(scale)
+            self._clip_deltas(dA32, dB32, dW_norm, group["max_delta_norm"])
 
-            A.add_(dA32.to(A.dtype))
-            B.add_(dB32.to(B.dtype))
+            retraction = group.get("retraction", "factor")
+            if retraction == "factor":
+                A.add_(dA32.to(A.dtype))
+                B.add_(dB32.to(B.dtype))
+            else:
+                new_A, new_B = retract_lora(A32, B32, dA32, dB32, retraction)
+                A.copy_(new_A.to(A.dtype))
+                B.copy_(new_B.to(B.dtype))
 
             if self.balance and (self._sched_step % self.rebalance_every == 0):
                 self._rebalance_group(A, B)

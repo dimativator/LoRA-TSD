@@ -17,6 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
             "lora_pro",
             "lora_muon_manifold",
             "lora_tsd",
+            "lora_tsd_fast",
             "muon_full",
         ],
     )
@@ -72,6 +73,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--use-momentum", action="store_true")
     parser.add_argument("--momentum-cf", type=float, default=0.9)
     parser.add_argument("--loss-alpha", type=float, default=None)
+    parser.add_argument(
+        "--retraction", choices=["factor", "svd", "orthographic", "ksl"],
+        default="factor", help="Retraction for LoRA-TSD and LoRA-TSD fast.",
+    )
     parser.add_argument("--ball-iters", type=int, default=5)
     parser.add_argument("--ball-ridge-eps", type=float, default=1e-8)
     parser.add_argument("--ball-balance", action="store_true")

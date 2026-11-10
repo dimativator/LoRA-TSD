@@ -7,6 +7,7 @@ from .muon import Muon
 from .riemannian_lora import RiemannianSGD, Riemannion
 from .sgd import LoRASGD
 from .lora_tsd import LoRATSD
+from .lora_tsd_fast import LoRATSDFast
 
 
 def build_optimizer(params, config):
@@ -107,9 +108,11 @@ def build_optimizer(params, config):
             log_optimizer_stats=False,
         )
 
-    if name == "lora_tsd":
-        return LoRATSD(
+    if name in {"lora_tsd", "lora_tsd_fast"}:
+        optimizer_cls = LoRATSDFast if name == "lora_tsd_fast" else LoRATSD
+        return optimizer_cls(
             params,
+            retraction=config.get("retraction", "factor"),
             norm_ord=2,
             use_momentum=config["use_momentum"],
             momentum_cf=config["momentum_cf"],
