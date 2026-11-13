@@ -16,7 +16,7 @@ ARTIFACTS = WORKSPACE / "artifacts/paper_8b_three_seeds_cloud_20261113"
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["prepare", "pair", "inspect", "preflight", "reset-unstarted", "cleanup"])
+    parser.add_argument("mode", choices=["prepare", "pair", "inspect", "preflight", "reset-unstarted", "reserve-v2", "retry-failed", "cleanup"])
     parser.add_argument("--pair-id", type=int, choices=range(7))
     args = parser.parse_args()
     if args.mode == "pair" and args.pair_id is None:
@@ -28,7 +28,10 @@ def main() -> None:
         if args.mode == "pair":
             assert campaign["review_status"] == "passed"
             assert campaign.get("assets_ready_verified") is True
+            assert campaign.get("generation_two_reserved") is True
             assert not any(job["pair_id"] == args.pair_id for job in campaign["jobs"])
+            assert sum(job["gpus"] for job in campaign["jobs"]) + 2 <= 14
+            assert not campaign.get("ambiguous_submissions"), "Resolve all ambiguous submissions before allocating more GPUs"
         intent = f"{args.mode}-{args.pair_id if args.pair_id is not None else len(campaign['preparation_jobs'])}"
         if args.mode == "pair":
             intent += "-attempt" + str(len(campaign.get("allocation_history", [])) + 1)
@@ -41,6 +44,9 @@ def main() -> None:
             audit = json.loads((ARTIFACTS / "startup-recovery-audit.json").read_text())
             assert audit["new_wandb_runs"] == 0
             environment.update(encode_audit_environment("PAPER8B_STARTUP_RECOVERY_AUDIT", audit))
+        if args.mode == "retry-failed":
+            audit = json.loads((ARTIFACTS / "retry-audit.json").read_text())
+            environment.update(encode_audit_environment("PAPER8B_RETRY_AUDIT", audit))
         if args.mode == "cleanup":
             audit = json.loads((ARTIFACTS / "final-cleanup-authorization.json").read_text())
             assert audit["verified_runs"] == 180 and audit["all_owned_jobs_terminal"] is True
@@ -63,9 +69,12 @@ def main() -> None:
                    "--note", f"paper8b_3seed_{intent}_20261113"]
         for key, value in environment.items():
             command.extend(["--env", key + "=" + value])
-        remote = "import subprocess\ncommand=" + repr(command) + "\n"
+        remote = "import subprocess,json\ncommand=" + repr(command) + "\n"
         remote += "r=subprocess.run(command+['--dry-run'],capture_output=True,text=True)\n"
-        remote += "if r.returncode==0:r=subprocess.run(command,capture_output=True,text=True)\n"
+        remote += "if r.returncode==0:\n"
+        remote += " payload=json.loads(r.stdout)\n"
+        remote += " assert payload.get('logs_dir')=='/home/jovyan/shares/SR006.nfs3/mlsub-logs','Bootstrap log route changed; submission blocked'\n"
+        remote += " r=subprocess.run(command,capture_output=True,text=True)\n"
         remote += "out=r.stdout+r.stderr\n"
         remote += "for secret in " + repr(secrets) + ":out=out.replace(secret,'<redacted>')\n"
         remote += "print(out)\nraise SystemExit(r.returncode)\n"
@@ -95,8 +104,11 @@ def main() -> None:
         record = {"mode": args.mode, "job_id": ids[-1], "submitted_at": now(),
                   "source_revision": campaign["source_revision"], "environment_names": sorted(environment)}
         if args.mode == "pair":
-            record.update(pair_id=args.pair_id, workers=[2 * args.pair_id, 2 * args.pair_id + 1], gpus=2)
+            record.update(pair_id=args.pair_id, workers=[2 * args.pair_id, 2 * args.pair_id + 1], gpus=2,
+                          launcher_generation=2)
             campaign["jobs"].append(record)
+            campaign.setdefault("pending_pair_replacements", {}).pop(str(args.pair_id), None)
+            assert sum(row["gpus"] for row in campaign["jobs"]) <= 14
         else:
             campaign["preparation_jobs"].append(record)
         campaign["ambiguous_submissions"].remove(intent)

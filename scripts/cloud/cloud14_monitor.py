@@ -40,6 +40,7 @@ def main() -> None:
         entry = {"name": run.name, "path": run.path, "url": run.url,
                  "method": task["method"], "dataset": task["dataset"], "seed": task["seed"],
                  "state": run.state, "step": summary.get("optimizer_step", 0),
+                 "worker": run.config.get("worker"), "microbatch": run.config.get("microbatch"),
                  "best_accuracy": summary.get("best_accuracy"),
                  "best_step": summary.get("best_step"), "reused": bool(run.config.get("reused"))}
         if run.state == "finished" and summary.get("verified") is True:
@@ -73,6 +74,14 @@ def main() -> None:
                              evaluation_count=len(evaluations))
             else:
                 entry["evaluation_count"] = 0
+            if entry["microbatch"] is None:
+                entry["phase"] = "profiling"
+            elif entry["step"] == 0:
+                entry["phase"] = "initializing"
+            elif entry["step"] % 250 == 249 or (entry["step"] == 3000 and entry["evaluation_count"] < 12):
+                entry["phase"] = "validation"
+            else:
+                entry["phase"] = "training"
             entry["created_at"] = run.created_at
             active.append(entry)
     reused_count = sum(entry["reused"] for entry in verified.values())

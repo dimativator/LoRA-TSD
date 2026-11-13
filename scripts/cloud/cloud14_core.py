@@ -124,6 +124,8 @@ def snapshot_lines(payload: dict) -> list[str]:
 
 
 def decode_snapshot(text: str) -> dict:
+    # MPI can insert its stdout prefix in the middle of a single write.
+    text = re.sub(r"\[\d+,\d+\]<std(?:out|err)>:", "", text)
     parts = {}
     count = None
     for index, total, value in re.findall(r"PAPER8B_INSPECTION_GZ (\d+)/(\d+) ([A-Za-z0-9+/=]+)", text):
@@ -151,13 +153,66 @@ def claim(plan: dict, worker: int, state: Path = STATE) -> dict | None:
     with locked(state / "queue.lock"):
         for task in plan["queue"]:
             path = state / "tasks" / (task_key(task) + ".json")
-            if path.exists():
+            if not path.exists():
                 continue
-            save(path, {"task": task, "worker": worker, "phase": "claimed",
+            previous = json.loads(path.read_text())
+            if previous.get("phase") != "reserved_v2":
+                continue
+            assert previous["task"] == task and previous["launcher_generation"] == 2
+            save(path, {"launcher_generation": 2, "task": task, "worker": worker, "phase": "claimed",
                         "claimed_at": now(), "pid": os.getpid(),
                         "hostname": os.uname().nodename})
             return task
     return None
+
+
+def reserve_for_generation_two(plan: dict, state: Path) -> dict:
+    """Old launchers skip existing files and retire after their current training run."""
+    validate_plan(plan)
+    reserved = []
+    with locked(state / "queue.lock"):
+        for task in plan["queue"]:
+            key = task_key(task)
+            path = state / "tasks" / (key + ".json")
+            if path.exists():
+                continue
+            save(path, {"task": task, "phase": "reserved_v2", "launcher_generation": 2,
+                        "reserved_at": now(), "reason": "Padded attention and RSVD memory profiling"})
+            reserved.append(key)
+        result = {"timestamp": now(), "reserved": reserved, "count": len(reserved),
+                  "active_tasks_untouched": True, "launcher_generation": 2}
+        save(state / "generation-two-reservation.json", result)
+    return result
+
+
+def reserve_failed_attempt(plan: dict, state: Path, audit: dict) -> dict:
+    """Retry only an explicitly diagnosed failure after its entire allocation is terminal."""
+    assert audit["campaign"] == CAMPAIGN and audit["diagnosis"]
+    assert audit["job_status"].lower() in ["failed", "completed", "stopped", "cancelled", "canceled"]
+    age = (datetime.now(timezone.utc) - datetime.fromisoformat(audit["timestamp"])).total_seconds()
+    assert 0 <= age < 300
+    task = next(task for task in plan["queue"] if task_key(task) == audit["key"])
+    path = state / "tasks" / (audit["key"] + ".json")
+    with locked(state / "queue.lock"):
+        previous = json.loads(path.read_text())
+        assert previous["phase"] not in ["complete", "reserved_v2", "syncing"]
+        if previous["phase"] != "failed":
+            assert audit["job_status"].lower() != "completed"
+            assert audit["interrupted_by_allocation_failure"] is True
+        else:
+            assert previous["returncode"] != 0
+        assert previous["wandb_id"] == audit["wandb_id"]
+        assert previous["worker"] in audit["workers"]
+        assert previous["hostname"].startswith(audit["job_id"] + "-")
+        assert previous.get("step", 0) == audit["last_step"]
+        assert not previous.get("verification")
+        assert audit["raw_partial_history_preserved"] is True
+        archive = state / "failed-attempts" / (audit["key"] + "-" + audit["wandb_id"] + ".json")
+        assert not archive.exists()
+        save(archive, {"status": previous, "retry_audit": audit})
+        save(path, {"task": task, "phase": "reserved_v2", "launcher_generation": 2,
+                    "reserved_at": now(), "previous_attempt": str(archive)})
+    return {"timestamp": now(), "key": audit["key"], "archive": str(archive)}
 
 
 def wandb_row(row: dict) -> dict:

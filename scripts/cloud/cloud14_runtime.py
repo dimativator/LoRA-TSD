@@ -6,7 +6,6 @@ import json
 import math
 import os
 from pathlib import Path
-import runpy
 import shutil
 import signal
 import subprocess
@@ -66,23 +65,16 @@ def arguments(task: dict, frozen: Path, run_dir: Path, microbatch: int) -> list[
 
 def profile_main(args) -> None:
     frozen = unpack()
-    sys.path.insert(0, str(frozen / "scripts/brain_lab"))
-    import paper_8b_campaign
+    materialized = json.loads(args.task.read_text())
     permitted = {"paper8b_" + task_key(task) for task in plan()["queue"]}
-    # The old queue's ownership map intentionally excludes these new Cloud workers.
-    # Preserve the numerical profiler and replace only its pre-CUDA ownership predicate.
-    def owns_task(worker: str, task: dict) -> bool:
-        name = task["run_name"]
-        if name not in permitted or not worker.startswith("cloud"):
-            return False
-        record = json.loads((STATE / "tasks" / (name.removeprefix("paper8b_") + ".json")).read_text())
-        return (record["worker"] == int(worker.removeprefix("cloud"))
-                and record["pid"] == os.getppid()
-                and record["hostname"] == os.uname().nodename
-                and record["phase"] == "profiling")
-    paper_8b_campaign.task_is_enabled = owns_task
-    sys.argv = ["paper_8b_profile.py", "--task", str(args.task), "--microbatch", str(args.microbatch)]
-    runpy.run_path(str(frozen / "scripts/brain_lab/paper_8b_profile.py"), run_name="__main__")
+    assert materialized["run_name"] in permitted
+    from cloud14_profile import main as padded_profile
+    import torch
+    try:
+        padded_profile(args, frozen, materialized)
+    except torch.OutOfMemoryError:
+        print("PROFILE_OOM", flush=True)
+        raise SystemExit(42)
 
 
 @contextmanager
@@ -211,10 +203,18 @@ def choose_microbatch(task: dict, frozen: Path, directory: Path, env: dict,
                                                "microbatch": batch, "returncode": process.returncode,
                                                "tail": output[-5000:]}), flush=True)
         if process.returncode == 0:
+            status["memory_profile_version"] = 2
             return batch
         if process.returncode not in [42, 43]:
             raise RuntimeError(f"Unexpected profile exit {process.returncode}; diagnosis required")
     raise RuntimeError("No safe microbatch at current free VRAM; resource wait required")
+
+
+def diagnostic_files(directory: Path) -> list[Path]:
+    return [path for path in directory.rglob("*")
+            if path.is_file() and not path.is_symlink()
+            and "wandb" not in path.relative_to(directory).parts
+            and path.suffix in [".log", ".jsonl", ".json"]]
 
 
 def run_task(task: dict, worker: int, frozen: Path, env: dict) -> None:
@@ -278,19 +278,20 @@ def run_task(task: dict, worker: int, frozen: Path, env: dict) -> None:
             save(status_path, status)
             try:
                 if run is not None:
-                    for file in directory.rglob("*.log"):
+                    for file in diagnostic_files(directory):
                         run.save(str(file), base_path=str(directory), policy="now")
-                    for file in directory.rglob("*.jsonl"):
-                        run.save(str(file), base_path=str(directory), policy="now")
+                    run.summary.update({"verified": False, "returncode": status.get("returncode"),
+                                        "failure": str(error)})
                     run.finish(exit_code=1)
             finally:
-                # An upload exception must not discard the only raw histories. This
-                # temporary log spool is removed after independently verified sync.
-                assert not list(directory.rglob("*.pt")) and not list(directory.rglob("*.safetensors"))
+                # Preserve only diagnostic files. Never copy W&B's own upload tree.
+                files = diagnostic_files(directory)
                 recovery = STATE / "pending-wandb-sync" / (key + f"-{os.getpid()}")
-                require_space(affected_paths(), {recovery: sum(p.stat().st_size for p in directory.rglob("*") if p.is_file())})
-                recovery.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                shutil.copytree(directory, recovery, symlinks=False)
+                require_space(affected_paths(), {recovery: sum(file.stat().st_size for file in files)})
+                for file in files:
+                    target = recovery / file.relative_to(directory)
+                    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    shutil.copy2(file, target)
                 status["recovery_logs"] = str(recovery)
                 save(status_path, status)
             print("PAPER8B_FAILURE=" + json.dumps(status), flush=True)
@@ -309,7 +310,7 @@ def worker(worker_id: int) -> None:
     os.environ.update(env)
     worker_path = STATE / "workers" / f"{worker_id}.json"
     status = {"worker": worker_id, "pid": os.getpid(), "hostname": os.uname().nodename,
-              "started_at": now(), "cuda_visible_devices": env["CUDA_VISIBLE_DEVICES"]}
+              "launcher_generation": 2, "started_at": now(), "cuda_visible_devices": env["CUDA_VISIBLE_DEVICES"]}
     # Hold one worker lock for the process lifetime; duplicate workers fail before CUDA.
     from cloud14_core import locked
     with locked(STATE / "workers" / f"{worker_id}.lock"):
@@ -328,7 +329,9 @@ def worker(worker_id: int) -> None:
         except Exception as error:
             status.update(phase="failed", timestamp=now(), error_type=type(error).__name__)
             save(worker_path, status)
-            raise
+            # Exit this rank cleanly so MPI preserves its healthy partner. The
+            # failed task stays failed until an explicit terminal-allocation audit.
+            return
 
 
 def pair(pair_id: int) -> None:
@@ -397,6 +400,19 @@ def dispatch(args) -> None:
         audit = decode_audit_environment("PAPER8B_STARTUP_RECOVERY_AUDIT")
         result = reset_unstarted(STATE, audit, {task_key(task) for task in plan()["queue"]})
         print("PAPER8B_RESET_UNSTARTED=" + json.dumps(result), flush=True)
+    elif args.mode == "reserve-v2":
+        from cloud14_core import reserve_for_generation_two
+        require_space(affected_paths())
+        result = reserve_for_generation_two(plan(), STATE)
+        print("PAPER8B_RESERVED_V2=" + json.dumps(result), flush=True)
+        inspect()
+    elif args.mode == "retry-failed":
+        from cloud14_core import decode_audit_environment, reserve_failed_attempt
+        require_space(affected_paths())
+        audit = decode_audit_environment("PAPER8B_RETRY_AUDIT")
+        result = [reserve_failed_attempt(plan(), STATE, attempt) for attempt in audit["attempts"]]
+        print("PAPER8B_RETRY_RESERVED=" + json.dumps(result), flush=True)
+        inspect()
     elif args.mode == "cleanup":
         from cloud14_core import cleanup_owned_assets, decode_audit_environment
         confirmation = decode_audit_environment("PAPER8B_FINAL_CLEANUP_AUDIT")
