@@ -32,7 +32,7 @@ def preflight() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["preflight", "prepare", "prepare-child", "pair", "worker", "profile", "inspect", "cleanup"])
+    parser.add_argument("mode", choices=["preflight", "prepare", "prepare-child", "pair", "worker", "profile", "inspect", "reset-unstarted", "cleanup"])
     parser.add_argument("--pair-id", type=int)
     parser.add_argument("--worker-id", type=int)
     parser.add_argument("--task", type=Path)

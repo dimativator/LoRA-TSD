@@ -16,7 +16,7 @@ ARTIFACTS = WORKSPACE / "artifacts/paper_8b_three_seeds_cloud_20261113"
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["prepare", "pair", "inspect", "preflight", "cleanup"])
+    parser.add_argument("mode", choices=["prepare", "pair", "inspect", "preflight", "reset-unstarted", "cleanup"])
     parser.add_argument("--pair-id", type=int, choices=range(7))
     args = parser.parse_args()
     if args.mode == "pair" and args.pair_id is None:
@@ -30,11 +30,17 @@ def main() -> None:
             assert campaign.get("assets_ready_verified") is True
             assert not any(job["pair_id"] == args.pair_id for job in campaign["jobs"])
         intent = f"{args.mode}-{args.pair_id if args.pair_id is not None else len(campaign['preparation_jobs'])}"
+        if args.mode == "pair":
+            intent += "-attempt" + str(len(campaign.get("allocation_history", [])) + 1)
         assert intent not in campaign.get("ambiguous_submissions", [])
         environment = {"CUDA_DEVICE_ORDER": "PCI_BUS_ID", "WANDB_BASE_URL": "https://wandb-radfan.ru",
                        "WANDB_ENTITY": "andrey", "WANDB_PROJECT": "LoRA-Muon",
                        "PYTHONDONTWRITEBYTECODE": "1",
                        "PAPER8B_BUNDLE_SHA256": campaign["runtime_bundle_sha256"]}
+        if args.mode == "reset-unstarted":
+            audit = json.loads((ARTIFACTS / "startup-recovery-audit.json").read_text())
+            assert audit["new_wandb_runs"] == 0
+            environment["PAPER8B_STARTUP_RECOVERY_AUDIT"] = json.dumps(audit)
         if args.mode == "cleanup":
             audit = json.loads((ARTIFACTS / "final-cleanup-authorization.json").read_text())
             assert audit["verified_runs"] == 180 and audit["all_owned_jobs_terminal"] is True

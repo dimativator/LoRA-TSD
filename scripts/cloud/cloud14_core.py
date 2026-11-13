@@ -170,6 +170,37 @@ def cleanup_owned_assets(root: Path, state: Path, confirmation: dict) -> int:
     return size
 
 
+def reset_unstarted(state: Path, audit: dict, permitted: set[str]) -> dict:
+    """Archive only zero-update claims after all previous allocations are proven terminal."""
+    assert audit["campaign"] == CAMPAIGN and audit["new_wandb_runs"] == 0
+    assert len(audit["jobs"]) == len({row["job_id"] for row in audit["jobs"]}) == 7
+    assert all(row["status"] == "failed" for row in audit["jobs"])
+    age = (datetime.now(timezone.utc) - datetime.fromisoformat(audit["timestamp"])).total_seconds()
+    assert 0 <= age < 300, "Refresh the terminal-job audit before resetting claims"
+    with locked(state / "queue.lock"):
+        tasks = list((state / "tasks").glob("*.json"))
+        workers = list((state / "workers").glob("*.json"))
+        for path in tasks:
+            record = json.loads(path.read_text())
+            assert path.stem in permitted and record.get("step", 0) == 0
+            assert not record.get("wandb_id") and not record.get("verification")
+            assert record["phase"] != "complete"
+        for path in workers:
+            assert int(path.stem) in range(14)
+        archive = state / "startup-history" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        assert not archive.exists()
+        for path in tasks + workers:
+            target = archive / path.parent.name / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            path.replace(target)
+        result = {"timestamp": now(), "reason": "Cloud launches one entry per GPU/MPI rank",
+                  "audit": audit, "archived_tasks": len(tasks), "archived_workers": len(workers),
+                  "archive": str(archive), "training_updates_lost": 0}
+        save(archive / "audit.json", result)
+        save(state / "reset-unstarted.json", result)
+        return result
+
+
 if __name__ == "__main__":
     assert sys.argv[1:] == ["disk"]
     print(json.dumps(_raw_disk_records([Path(path) for path in json.loads(sys.stdin.read())])))

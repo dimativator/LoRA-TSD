@@ -333,7 +333,8 @@ def worker(worker_id: int) -> None:
 
 def pair(pair_id: int) -> None:
     assert pair_id in range(7)
-    assert os.environ.get("OMPI_COMM_WORLD_RANK", "0") == "0", "Only one coordinator per allocation"
+    rank = int(os.environ.get("OMPI_COMM_WORLD_LOCAL_RANK", os.environ.get("OMPI_COMM_WORLD_RANK", "0")))
+    assert int(os.environ["OMPI_COMM_WORLD_SIZE"]) == 2 and rank in [0, 1]
     require_space(affected_paths())
     unpack()
     query = subprocess.run(["nvidia-smi", "--query-gpu=index,uuid,memory.total,memory.free",
@@ -344,15 +345,12 @@ def pair(pair_id: int) -> None:
     process_query = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,gpu_uuid,used_memory",
                                     "--format=csv,noheader,nounits"], capture_output=True, text=True)
     print("ALLOCATED_GPU_PROCESSES=" + process_query.stdout, flush=True)
-    processes = []
-    for index, device in enumerate(devices):
-        env = {**configured_environment(), "CUDA_VISIBLE_DEVICES": device,
-               "CUDA_DEVICE_ORDER": "PCI_BUS_ID"}
-        processes.append(subprocess.Popen([str(PYTHON), str(HERE / "cloud14_entry.py"), "worker",
-                                            "--worker-id", str(2 * pair_id + index)], env=env))
-    returncodes = [process.wait() for process in processes]
-    if any(returncodes):
-        raise RuntimeError(f"GPU worker exits: {returncodes}")
+    env = {**configured_environment(), "CUDA_VISIBLE_DEVICES": devices[rank],
+           "CUDA_DEVICE_ORDER": "PCI_BUS_ID"}
+    # Cloud starts this entry point once per GPU, not once per allocation.
+    # Replace each MPI rank with exactly one corresponding independent worker.
+    os.execve(str(PYTHON), [str(PYTHON), str(HERE / "cloud14_entry.py"), "worker",
+                           "--worker-id", str(2 * pair_id + rank)], env)
 
 
 def inspect() -> None:
@@ -390,6 +388,12 @@ def dispatch(args) -> None:
         pair(args.pair_id)
     elif args.mode == "inspect":
         inspect()
+    elif args.mode == "reset-unstarted":
+        from cloud14_core import reset_unstarted
+        require_space(affected_paths())
+        audit = json.loads(os.environ["PAPER8B_STARTUP_RECOVERY_AUDIT"])
+        result = reset_unstarted(STATE, audit, {task_key(task) for task in plan()["queue"]})
+        print("PAPER8B_RESET_UNSTARTED=" + json.dumps(result), flush=True)
     elif args.mode == "cleanup":
         from cloud14_core import cleanup_owned_assets
         confirmation = json.loads(os.environ["PAPER8B_FINAL_CLEANUP_AUDIT"])
