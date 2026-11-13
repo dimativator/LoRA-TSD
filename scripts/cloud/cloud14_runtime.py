@@ -1,7 +1,6 @@
 """Schedule independent GPU runs while leaving the frozen training source untouched."""
 
 from contextlib import contextmanager
-import base64
 import io
 import json
 import math
@@ -390,14 +389,14 @@ def dispatch(args) -> None:
     elif args.mode == "inspect":
         inspect()
     elif args.mode == "reset-unstarted":
-        from cloud14_core import reset_unstarted
+        from cloud14_core import decode_audit_environment, reset_unstarted
         require_space(affected_paths())
-        audit = json.loads(base64.urlsafe_b64decode(os.environ["PAPER8B_STARTUP_RECOVERY_AUDIT"]))
+        audit = decode_audit_environment("PAPER8B_STARTUP_RECOVERY_AUDIT")
         result = reset_unstarted(STATE, audit, {task_key(task) for task in plan()["queue"]})
         print("PAPER8B_RESET_UNSTARTED=" + json.dumps(result), flush=True)
     elif args.mode == "cleanup":
-        from cloud14_core import cleanup_owned_assets
-        confirmation = json.loads(base64.urlsafe_b64decode(os.environ["PAPER8B_FINAL_CLEANUP_AUDIT"]))
+        from cloud14_core import cleanup_owned_assets, decode_audit_environment
+        confirmation = decode_audit_environment("PAPER8B_FINAL_CLEANUP_AUDIT")
         assert confirmation["campaign"] == CAMPAIGN
         assert len(confirmation["audit_sha256"]) == 64
         save(STATE / "final-cleanup-authorization.json", confirmation)

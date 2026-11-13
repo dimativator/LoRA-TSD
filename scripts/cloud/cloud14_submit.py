@@ -1,7 +1,6 @@
 """Submit one recorded campaign allocation without printing or persisting credentials."""
 
 import argparse
-import base64
 import fcntl
 import json
 import netrc
@@ -9,7 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from cloud14_core import now, save
+from cloud14_core import encode_audit_environment, now, save
 
 WORKSPACE = Path(__file__).resolve().parents[4]
 ARTIFACTS = WORKSPACE / "artifacts/paper_8b_three_seeds_cloud_20261113"
@@ -41,12 +40,12 @@ def main() -> None:
         if args.mode == "reset-unstarted":
             audit = json.loads((ARTIFACTS / "startup-recovery-audit.json").read_text())
             assert audit["new_wandb_runs"] == 0
-            environment["PAPER8B_STARTUP_RECOVERY_AUDIT"] = base64.urlsafe_b64encode(json.dumps(audit).encode()).decode()
+            environment.update(encode_audit_environment("PAPER8B_STARTUP_RECOVERY_AUDIT", audit))
         if args.mode == "cleanup":
             audit = json.loads((ARTIFACTS / "final-cleanup-authorization.json").read_text())
             assert audit["verified_runs"] == 180 and audit["all_owned_jobs_terminal"] is True
             assert audit["wandb_sync_verified"] is True and audit["results_export_verified"] is True
-            environment["PAPER8B_FINAL_CLEANUP_AUDIT"] = base64.urlsafe_b64encode(json.dumps(audit).encode()).decode()
+            environment.update(encode_audit_environment("PAPER8B_FINAL_CLEANUP_AUDIT", audit))
         secrets = []
         if args.mode in ["prepare", "pair"]:
             key = netrc.netrc().authenticators("wandb-radfan.ru")[2]
@@ -64,7 +63,10 @@ def main() -> None:
                    "--note", f"paper8b_3seed_{intent}_20261113"]
         for key, value in environment.items():
             command.extend(["--env", key + "=" + value])
-        remote = "import subprocess\nr=subprocess.run(" + repr(command) + ",capture_output=True,text=True)\nout=r.stdout+r.stderr\n"
+        remote = "import subprocess\ncommand=" + repr(command) + "\n"
+        remote += "r=subprocess.run(command+['--dry-run'],capture_output=True,text=True)\n"
+        remote += "if r.returncode==0:r=subprocess.run(command,capture_output=True,text=True)\n"
+        remote += "out=r.stdout+r.stderr\n"
         remote += "for secret in " + repr(secrets) + ":out=out.replace(secret,'<redacted>')\n"
         remote += "print(out)\nraise SystemExit(r.returncode)\n"
         campaign.setdefault("ambiguous_submissions", []).append(intent)

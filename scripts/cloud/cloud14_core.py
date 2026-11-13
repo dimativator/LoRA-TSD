@@ -1,6 +1,7 @@
 """CPU-only campaign bookkeeping shared by the Cloud launcher and its tests."""
 
 from contextlib import contextmanager
+import base64
 from datetime import datetime, timezone
 import fcntl
 import hashlib
@@ -95,6 +96,21 @@ def locked(path: Path):
 
 def task_key(task: dict) -> str:
     return f"{task['method']}_{task['dataset']}_seed{task['seed']}"
+
+
+def encode_audit_environment(prefix: str, audit: dict) -> dict[str, str]:
+    """Cloud's gateway accepts at most255safecharacters per environment value."""
+    value = base64.urlsafe_b64encode(json.dumps(audit).encode()).decode()
+    chunks = [value[index:index + 200] for index in range(0, len(value), 200)]
+    return {prefix + "_COUNT": str(len(chunks)),
+            **{prefix + "_" + str(index): chunk for index, chunk in enumerate(chunks)}}
+
+
+def decode_audit_environment(prefix: str) -> dict:
+    count = int(os.environ[prefix + "_COUNT"])
+    assert count in range(1, 33)
+    value = "".join(os.environ[prefix + "_" + str(index)] for index in range(count))
+    return json.loads(base64.urlsafe_b64decode(value))
 
 
 def validate_plan(plan: dict) -> None:
