@@ -16,7 +16,7 @@ ARTIFACTS = WORKSPACE / "artifacts/paper_8b_three_seeds_cloud_20261113"
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["prepare", "pair", "inspect", "preflight"])
+    parser.add_argument("mode", choices=["prepare", "pair", "inspect", "preflight", "cleanup"])
     parser.add_argument("--pair-id", type=int, choices=range(7))
     args = parser.parse_args()
     if args.mode == "pair" and args.pair_id is None:
@@ -35,6 +35,11 @@ def main() -> None:
                        "WANDB_ENTITY": "andrey", "WANDB_PROJECT": "LoRA-Muon",
                        "PYTHONDONTWRITEBYTECODE": "1",
                        "PAPER8B_BUNDLE_SHA256": campaign["runtime_bundle_sha256"]}
+        if args.mode == "cleanup":
+            audit = json.loads((ARTIFACTS / "final-cleanup-authorization.json").read_text())
+            assert audit["verified_runs"] == 180 and audit["all_owned_jobs_terminal"] is True
+            assert audit["wandb_sync_verified"] is True and audit["results_export_verified"] is True
+            environment["PAPER8B_FINAL_CLEANUP_AUDIT"] = json.dumps(audit)
         secrets = []
         if args.mode in ["prepare", "pair"]:
             key = netrc.netrc().authenticators("wandb-radfan.ru")[2]

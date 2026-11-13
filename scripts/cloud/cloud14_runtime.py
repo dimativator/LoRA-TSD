@@ -334,6 +334,7 @@ def worker(worker_id: int) -> None:
 def pair(pair_id: int) -> None:
     assert pair_id in range(7)
     assert os.environ.get("OMPI_COMM_WORLD_RANK", "0") == "0", "Only one coordinator per allocation"
+    require_space(affected_paths())
     unpack()
     query = subprocess.run(["nvidia-smi", "--query-gpu=index,uuid,memory.total,memory.free",
                             "--format=csv,noheader,nounits"], capture_output=True, text=True, check=True)
@@ -391,5 +392,9 @@ def dispatch(args) -> None:
         inspect()
     elif args.mode == "cleanup":
         from cloud14_core import cleanup_owned_assets
-        confirmation = json.loads((STATE / "final-cleanup-authorization.json").read_text())
+        confirmation = json.loads(os.environ["PAPER8B_FINAL_CLEANUP_AUDIT"])
+        assert confirmation["campaign"] == CAMPAIGN
+        assert len(confirmation["audit_sha256"]) == 64
+        save(STATE / "final-cleanup-authorization.json", confirmation)
         cleanup_owned_assets(ASSETS, STATE, confirmation)
+        print("PAPER8B_CLEANUP_COMPLETE=" + json.dumps(json.loads((STATE / "cleanup.json").read_text())), flush=True)
