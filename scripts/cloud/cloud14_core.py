@@ -5,9 +5,11 @@ import base64
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import gzip
 import json
 import math
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -111,6 +113,26 @@ def decode_audit_environment(prefix: str) -> dict:
     assert count in range(1, 33)
     value = "".join(os.environ[prefix + "_" + str(index)] for index in range(count))
     return json.loads(base64.urlsafe_b64decode(value))
+
+
+def snapshot_lines(payload: dict) -> list[str]:
+    """Keep each MPI log record well below PIPE_BUF; gzip verifies transport integrity."""
+    value = base64.b64encode(gzip.compress(json.dumps(payload).encode(), mtime=0)).decode()
+    chunks = [value[index:index + 1600] for index in range(0, len(value), 1600)]
+    return [f"PAPER8B_INSPECTION_GZ {index}/{len(chunks)} {chunk}"
+            for index, chunk in enumerate(chunks)]
+
+
+def decode_snapshot(text: str) -> dict:
+    parts = {}
+    count = None
+    for index, total, value in re.findall(r"PAPER8B_INSPECTION_GZ (\d+)/(\d+) ([A-Za-z0-9+/=]+)", text):
+        assert count in [None, int(total)]
+        count = int(total)
+        parts[int(index)] = value
+    assert count is not None and set(parts) == set(range(count)), "Incomplete inspection transport"
+    compressed = base64.b64decode("".join(parts[index] for index in range(count)), validate=True)
+    return json.loads(gzip.decompress(compressed))
 
 
 def validate_plan(plan: dict) -> None:

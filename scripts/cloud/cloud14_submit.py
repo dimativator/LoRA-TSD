@@ -100,7 +100,11 @@ def main() -> None:
         else:
             campaign["preparation_jobs"].append(record)
         campaign["ambiguous_submissions"].remove(intent)
-        campaign["status"] = "gpu_allocations_submitted" if args.mode == "pair" else args.mode + "_submitted"
+        if args.mode == "pair":
+            campaign["status"] = "gpu_allocations_submitted"
+        elif not campaign["jobs"]:
+            campaign["status"] = args.mode + "_submitted"
+        campaign["last_auxiliary_job"] = record if args.mode != "pair" else campaign.get("last_auxiliary_job")
         save(campaign_path, campaign)
 
 

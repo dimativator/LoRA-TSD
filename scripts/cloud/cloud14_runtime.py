@@ -354,9 +354,10 @@ def pair(pair_id: int) -> None:
 
 
 def inspect() -> None:
+    from cloud14_core import snapshot_lines
     ready = ASSETS / "ready.json"
     preparation = STATE / "prepare-status.json"
-    print("PAPER8B_INSPECTION=" + json.dumps({"timestamp": now(),
+    snapshot = {"timestamp": now(),
           "filesystems": disk_records(affected_paths()),
           "assets_ready": ready.exists(),
           "assets_ready_record": json.loads(ready.read_text()) if ready.exists() else None,
@@ -364,7 +365,9 @@ def inspect() -> None:
                           for path in ASSETS.rglob("*") if path.is_file()] if ASSETS.exists() else [],
           "preparation": json.loads(preparation.read_text()) if preparation.exists() else None,
           "tasks": [json.loads(path.read_text()) for path in sorted((STATE / "tasks").glob("*.json"))],
-          "workers": [json.loads(path.read_text()) for path in sorted((STATE / "workers").glob("*.json"))]}), flush=True)
+          "workers": [json.loads(path.read_text()) for path in sorted((STATE / "workers").glob("*.json"))]}
+    for line in snapshot_lines(snapshot):
+        print(line, flush=True)
 
 
 def dispatch(args) -> None:
