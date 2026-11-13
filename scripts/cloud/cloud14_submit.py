@@ -1,6 +1,7 @@
 """Submit one recorded campaign allocation without printing or persisting credentials."""
 
 import argparse
+import base64
 import fcntl
 import json
 import netrc
@@ -40,12 +41,12 @@ def main() -> None:
         if args.mode == "reset-unstarted":
             audit = json.loads((ARTIFACTS / "startup-recovery-audit.json").read_text())
             assert audit["new_wandb_runs"] == 0
-            environment["PAPER8B_STARTUP_RECOVERY_AUDIT"] = json.dumps(audit)
+            environment["PAPER8B_STARTUP_RECOVERY_AUDIT"] = base64.urlsafe_b64encode(json.dumps(audit).encode()).decode()
         if args.mode == "cleanup":
             audit = json.loads((ARTIFACTS / "final-cleanup-authorization.json").read_text())
             assert audit["verified_runs"] == 180 and audit["all_owned_jobs_terminal"] is True
             assert audit["wandb_sync_verified"] is True and audit["results_export_verified"] is True
-            environment["PAPER8B_FINAL_CLEANUP_AUDIT"] = json.dumps(audit)
+            environment["PAPER8B_FINAL_CLEANUP_AUDIT"] = base64.urlsafe_b64encode(json.dumps(audit).encode()).decode()
         secrets = []
         if args.mode in ["prepare", "pair"]:
             key = netrc.netrc().authenticators("wandb-radfan.ru")[2]
@@ -82,6 +83,10 @@ def main() -> None:
         (ARTIFACTS / f"submission-{intent}.log").write_text(output)
         ids = re.findall(r"lm-mpi-job-[a-f0-9-]+", output)
         if not ids:
+            if result.returncode == 2:
+                # The CLI rejected the request before submitting it to Cloud.ru.
+                campaign["ambiguous_submissions"].remove(intent)
+                save(campaign_path, campaign)
             if result.returncode:
                 raise RuntimeError("Submission failed; review redacted log before clearing intent")
             raise RuntimeError("No job ID; inspect scheduler before retrying")
