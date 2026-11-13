@@ -125,6 +125,10 @@ def once() -> bool:
                    if record.get("hostname", "").startswith(pair["job_id"] + "-")]
         incomplete = [record for record in records if record["phase"] != "complete"]
         if incomplete:
+            # This repair authorizes exactly the diagnosed initialization OOM and
+            # its MPI counterpart. New failures, especially disk stops, need diagnosis.
+            assert pair["job_id"] == "lm-mpi-job-b89baafb-27b1-4d72-888e-47dd1e6a7712", "New failure requires diagnosis before retry"
+            assert {task_key(record["task"]) for record in incomplete} <= {"sgd_piqa_seed1", "sgd_piqa_seed42"}
             audits = [preserve_partial(record, job,
                 "RSVD OOM or MPI counterpart interruption; padded initialization memory probe added")
                 for record in incomplete]
