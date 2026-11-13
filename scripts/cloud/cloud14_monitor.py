@@ -27,6 +27,13 @@ def main() -> None:
             tasks[task["run_name"]] = task
     verified_path = ARTIFACTS / "wandb-independent-verification.json"
     verified = json.loads(verified_path.read_text()) if verified_path.exists() else {}
+    interrupted_path = ARTIFACTS / "interrupted-attempts.json"
+    interrupted = json.loads(interrupted_path.read_text()) if interrupted_path.exists() else {}
+    inspection_path = ARTIFACTS / "inspection-latest.json"
+    if inspection_path.exists():
+        for record in json.loads(inspection_path.read_text())["tasks"]:
+            if record["phase"] == "failed" and record.get("wandb_id"):
+                interrupted.setdefault(record["wandb_id"], {"diagnosis": record.get("error")})
     active = []
     failed = []
     pending_verification = []
@@ -43,6 +50,11 @@ def main() -> None:
                  "worker": run.config.get("worker"), "microbatch": run.config.get("microbatch"),
                  "best_accuracy": summary.get("best_accuracy"),
                  "best_step": summary.get("best_step"), "reused": bool(run.config.get("reused"))}
+        if run.id in interrupted:
+            entry.update(state="failed_or_interrupted", diagnosis=interrupted[run.id].get("diagnosis"),
+                         wandb_reported_state=run.state)
+            failed.append(entry)
+            continue
         if run.state == "finished" and summary.get("verified") is True:
             if run.name in verified:
                 assert verified[run.name]["path"] == run.path, "Duplicate completed seed requires audit"

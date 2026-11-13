@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from cloud14_core import decode_snapshot, save
+from cloud14_core import decode_snapshot, locked, save
 from cloud14_submit import ARTIFACTS
 
 
@@ -30,10 +30,11 @@ def main() -> None:
     result.check_returncode()
     snapshot = decode_snapshot(text)
     save(ARTIFACTS / "inspection-latest.json", snapshot)
-    campaign = json.loads((ARTIFACTS / "campaign.json").read_text())
-    campaign.update(assets_ready_verified=snapshot["assets_ready"], latest_inspection="inspection-latest.json",
-                    storage_latest=snapshot["filesystems"])
-    save(ARTIFACTS / "campaign.json", campaign)
+    with locked(ARTIFACTS / "submission.lock"):
+        campaign = json.loads((ARTIFACTS / "campaign.json").read_text())
+        campaign.update(assets_ready_verified=snapshot["assets_ready"], latest_inspection="inspection-latest.json",
+                        storage_latest=snapshot["filesystems"])
+        save(ARTIFACTS / "campaign.json", campaign)
     print(json.dumps({"timestamp": snapshot["timestamp"], "assets_ready": snapshot["assets_ready"],
           "filesystems": [(row["requested_path"], row["available_bytes"]) for row in snapshot["filesystems"]],
           "tasks": [{key: row.get(key) for key in ["worker", "phase", "step", "microbatch", "child_pid",

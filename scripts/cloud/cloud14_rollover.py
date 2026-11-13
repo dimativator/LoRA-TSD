@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 
-from cloud14_core import CAMPAIGN, now, save, task_key
+from cloud14_core import CAMPAIGN, locked, now, save, task_key
 from cloud14_scheduler import TERMINAL, snapshot
 from cloud14_submit import ARTIFACTS
 
@@ -112,9 +112,10 @@ def once() -> bool:
             save(ARTIFACTS / "rollover-status.json", {"timestamp": now(), "phase": "waiting_real_initialization_proof"})
             return False
         save(ARTIFACTS / "generation-two-runtime-proof.json", {"timestamp": now(), "passing_tasks": passing})
-        campaign = json.loads(path.read_text())
-        campaign["generation_two_runtime_verified"] = True
-        save(path, campaign)
+        with locked(ARTIFACTS / "submission.lock"):
+            campaign = json.loads(path.read_text())
+            campaign["generation_two_runtime_verified"] = True
+            save(path, campaign)
     for pair in campaign["jobs"]:
         job = by_id[pair["job_id"]]
         if job["status"].lower() not in TERMINAL or pair.get("launcher_generation") == 2:
