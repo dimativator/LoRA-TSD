@@ -1,0 +1,2196 @@
+{
+  "status": "authorized_for_launch",
+  "prepared_date": "2026-11-13",
+  "target_model": "meta-llama/Meta-Llama-3.1-8B",
+  "model_revision": "d04e592bb4f6aa9cfee91e2e20afa771667e1d4b",
+  "seeds": [
+    0,
+    1,
+    42
+  ],
+  "datasets": [
+    "boolq",
+    "piqa",
+    "siqa",
+    "obqa",
+    "qnli",
+    "multi_nli"
+  ],
+  "target_runs": 180,
+  "verified_reusable_runs": 42,
+  "new_runs": 138,
+  "steps": 3000,
+  "eval_every": 250,
+  "effective_batch": 32,
+  "metric": "Best validation over all 12 evaluations including final3000; per-seed selection, then mean and sample SD",
+  "methods": [
+    {
+      "method": "SGD",
+      "id": "sgd",
+      "optimizer": "lora_sgd",
+      "target_runs": 18,
+      "verified_reusable_runs": 0,
+      "new_runs": 18,
+      "existing": [],
+      "missing": [
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "boolq",
+          "seed": 0
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "boolq",
+          "seed": 1
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "boolq",
+          "seed": 42
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "piqa",
+          "seed": 0
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "piqa",
+          "seed": 1
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "piqa",
+          "seed": 42
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "siqa",
+          "seed": 0
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "siqa",
+          "seed": 1
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "siqa",
+          "seed": 42
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "obqa",
+          "seed": 0
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "obqa",
+          "seed": 1
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "obqa",
+          "seed": 42
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "qnli",
+          "seed": 0
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "qnli",
+          "seed": 1
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "qnli",
+          "seed": 42
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "multi_nli",
+          "seed": 0
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "multi_nli",
+          "seed": 1
+        },
+        {
+          "method": "sgd",
+          "optimizer": "lora_sgd",
+          "dataset": "multi_nli",
+          "seed": 42
+        }
+      ]
+    },
+    {
+      "method": "AdamW",
+      "id": "adamw",
+      "optimizer": "adamw",
+      "target_runs": 18,
+      "verified_reusable_runs": 0,
+      "new_runs": 18,
+      "existing": [],
+      "missing": [
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "boolq",
+          "seed": 0
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "boolq",
+          "seed": 1
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "boolq",
+          "seed": 42
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "piqa",
+          "seed": 0
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "piqa",
+          "seed": 1
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "piqa",
+          "seed": 42
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "siqa",
+          "seed": 0
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "siqa",
+          "seed": 1
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "siqa",
+          "seed": 42
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "obqa",
+          "seed": 0
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "obqa",
+          "seed": 1
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "obqa",
+          "seed": 42
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "qnli",
+          "seed": 0
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "qnli",
+          "seed": 1
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "qnli",
+          "seed": 42
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "multi_nli",
+          "seed": 0
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "multi_nli",
+          "seed": 1
+        },
+        {
+          "method": "adamw",
+          "optimizer": "adamw",
+          "dataset": "multi_nli",
+          "seed": 42
+        }
+      ]
+    },
+    {
+      "method": "Muon",
+      "id": "muon",
+      "optimizer": "lora_muon",
+      "target_runs": 18,
+      "verified_reusable_runs": 0,
+      "new_runs": 18,
+      "existing": [],
+      "missing": [
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "boolq",
+          "seed": 0
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "boolq",
+          "seed": 1
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "boolq",
+          "seed": 42
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "piqa",
+          "seed": 0
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "piqa",
+          "seed": 1
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "piqa",
+          "seed": 42
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "siqa",
+          "seed": 0
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "siqa",
+          "seed": 1
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "siqa",
+          "seed": 42
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "obqa",
+          "seed": 0
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "obqa",
+          "seed": 1
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "obqa",
+          "seed": 42
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "qnli",
+          "seed": 0
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "qnli",
+          "seed": 1
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "qnli",
+          "seed": 42
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "multi_nli",
+          "seed": 0
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "multi_nli",
+          "seed": 1
+        },
+        {
+          "method": "muon",
+          "optimizer": "lora_muon",
+          "dataset": "multi_nli",
+          "seed": 42
+        }
+      ]
+    },
+    {
+      "method": "Riem-SGD",
+      "id": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "target_runs": 18,
+      "verified_reusable_runs": 0,
+      "new_runs": 18,
+      "existing": [],
+      "missing": [
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "boolq",
+          "seed": 0
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "boolq",
+          "seed": 1
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "boolq",
+          "seed": 42
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "piqa",
+          "seed": 0
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "piqa",
+          "seed": 1
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "piqa",
+          "seed": 42
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "siqa",
+          "seed": 0
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "siqa",
+          "seed": 1
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "siqa",
+          "seed": 42
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "obqa",
+          "seed": 0
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "obqa",
+          "seed": 1
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "obqa",
+          "seed": 42
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "qnli",
+          "seed": 0
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "qnli",
+          "seed": 1
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "qnli",
+          "seed": 42
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "multi_nli",
+          "seed": 0
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "multi_nli",
+          "seed": 1
+        },
+        {
+          "method": "riem_sgd",
+          "optimizer": "riemannian_sgd",
+          "dataset": "multi_nli",
+          "seed": 42
+        }
+      ]
+    },
+    {
+      "method": "LoRA-Rite",
+      "id": "lora_rite",
+      "optimizer": "lora_rite",
+      "target_runs": 18,
+      "verified_reusable_runs": 12,
+      "new_runs": 6,
+      "existing": [
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "boolq",
+          "seed": 0,
+          "run_name": "paper8b_lora_rite_boolq_seed0",
+          "best_accuracy_percent": 89.17431192660551,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "boolq",
+          "seed": 1,
+          "run_name": "paper8b_lora_rite_boolq_seed1",
+          "best_accuracy_percent": 62.17125382262997,
+          "best_step": 250
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "piqa",
+          "seed": 0,
+          "run_name": "paper8b_lora_rite_piqa_seed0",
+          "best_accuracy_percent": 51.196953210010875,
+          "best_step": 2250
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "piqa",
+          "seed": 1,
+          "run_name": "paper8b_lora_rite_piqa_seed1",
+          "best_accuracy_percent": 88.79216539717085,
+          "best_step": 2000
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "siqa",
+          "seed": 0,
+          "run_name": "paper8b_lora_rite_siqa_seed0",
+          "best_accuracy_percent": 81.26919140225179,
+          "best_step": 2250
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "siqa",
+          "seed": 1,
+          "run_name": "paper8b_lora_rite_siqa_seed1",
+          "best_accuracy_percent": 80.96212896622313,
+          "best_step": 2500
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "obqa",
+          "seed": 0,
+          "run_name": "paper8b_lora_rite_obqa_seed0",
+          "best_accuracy_percent": 87.0,
+          "best_step": 1000
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "obqa",
+          "seed": 1,
+          "run_name": "paper8b_lora_rite_obqa_seed1",
+          "best_accuracy_percent": 86.6,
+          "best_step": 2500
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "qnli",
+          "seed": 0,
+          "run_name": "paper8b_lora_rite_qnli_seed0",
+          "best_accuracy_percent": 94.7647812557203,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "qnli",
+          "seed": 1,
+          "run_name": "paper8b_lora_rite_qnli_seed1",
+          "best_accuracy_percent": 95.42375983891634,
+          "best_step": 2750
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "multi_nli",
+          "seed": 0,
+          "run_name": "paper8b_lora_rite_multi_nli_seed0",
+          "best_accuracy_percent": 90.37187977585329,
+          "best_step": 2750
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "multi_nli",
+          "seed": 1,
+          "run_name": "paper8b_lora_rite_multi_nli_seed1",
+          "best_accuracy_percent": 90.10697911360162,
+          "best_step": 2750
+        }
+      ],
+      "missing": [
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "boolq",
+          "seed": 42
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "piqa",
+          "seed": 42
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "siqa",
+          "seed": 42
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "obqa",
+          "seed": 42
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "qnli",
+          "seed": 42
+        },
+        {
+          "method": "lora_rite",
+          "optimizer": "lora_rite",
+          "dataset": "multi_nli",
+          "seed": 42
+        }
+      ]
+    },
+    {
+      "method": "Riemannion",
+      "id": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "target_runs": 18,
+      "verified_reusable_runs": 3,
+      "new_runs": 15,
+      "existing": [
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "boolq",
+          "seed": 0,
+          "run_name": "paper8b_riemannion_original_boolq_seed0",
+          "best_accuracy_percent": 88.92966360856269,
+          "best_step": 3000
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "piqa",
+          "seed": 0,
+          "run_name": "paper8b_riemannion_original_piqa_seed0",
+          "best_accuracy_percent": 88.68335146898802,
+          "best_step": 2000
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "siqa",
+          "seed": 0,
+          "run_name": "paper8b_riemannion_original_siqa_seed0",
+          "best_accuracy_percent": 80.24564994882293,
+          "best_step": 2500
+        }
+      ],
+      "missing": [
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "boolq",
+          "seed": 1
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "boolq",
+          "seed": 42
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "piqa",
+          "seed": 1
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "piqa",
+          "seed": 42
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "siqa",
+          "seed": 1
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "siqa",
+          "seed": 42
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "obqa",
+          "seed": 0
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "obqa",
+          "seed": 1
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "obqa",
+          "seed": 42
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "qnli",
+          "seed": 0
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "qnli",
+          "seed": 1
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "qnli",
+          "seed": 42
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "multi_nli",
+          "seed": 0
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "multi_nli",
+          "seed": 1
+        },
+        {
+          "method": "riemannion_original",
+          "optimizer": "riemannion_original",
+          "dataset": "multi_nli",
+          "seed": 42
+        }
+      ]
+    },
+    {
+      "method": "LoRA-Pro",
+      "id": "lora_pro",
+      "optimizer": "lora_pro",
+      "target_runs": 18,
+      "verified_reusable_runs": 3,
+      "new_runs": 15,
+      "existing": [
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "boolq",
+          "seed": 0,
+          "run_name": "paper8b_lora_pro_boolq_seed0",
+          "best_accuracy_percent": 88.77675840978593,
+          "best_step": 2750
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "piqa",
+          "seed": 0,
+          "run_name": "paper8b_lora_pro_piqa_seed0",
+          "best_accuracy_percent": 86.28944504896626,
+          "best_step": 2750
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "siqa",
+          "seed": 0,
+          "run_name": "paper8b_lora_pro_siqa_seed0",
+          "best_accuracy_percent": 78.86386898669396,
+          "best_step": 3000
+        }
+      ],
+      "missing": [
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "boolq",
+          "seed": 1
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "boolq",
+          "seed": 42
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "piqa",
+          "seed": 1
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "piqa",
+          "seed": 42
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "siqa",
+          "seed": 1
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "siqa",
+          "seed": 42
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "obqa",
+          "seed": 0
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "obqa",
+          "seed": 1
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "obqa",
+          "seed": 42
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "qnli",
+          "seed": 0
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "qnli",
+          "seed": 1
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "qnli",
+          "seed": 42
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "multi_nli",
+          "seed": 0
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "multi_nli",
+          "seed": 1
+        },
+        {
+          "method": "lora_pro",
+          "optimizer": "lora_pro",
+          "dataset": "multi_nli",
+          "seed": 42
+        }
+      ]
+    },
+    {
+      "method": "LoRA-Muon",
+      "id": "lora_muon",
+      "optimizer": "lora_muon_manifold",
+      "target_runs": 18,
+      "verified_reusable_runs": 12,
+      "new_runs": 6,
+      "existing": [
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "boolq",
+          "seed": 1,
+          "run_name": "paper8b_lora_muon_boolq_seed1",
+          "best_accuracy_percent": 89.32721712538226,
+          "best_step": 1750
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "boolq",
+          "seed": 42,
+          "run_name": "paper8b_lora_muon_boolq_seed42",
+          "best_accuracy_percent": 89.48012232415901,
+          "best_step": 500
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "piqa",
+          "seed": 1,
+          "run_name": "paper8b_lora_muon_piqa_seed1",
+          "best_accuracy_percent": 89.93471164309031,
+          "best_step": 1500
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "piqa",
+          "seed": 42,
+          "run_name": "paper8b_lora_muon_piqa_seed42",
+          "best_accuracy_percent": 89.60826985854189,
+          "best_step": 1000
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "siqa",
+          "seed": 1,
+          "run_name": "paper8b_lora_muon_siqa_seed1",
+          "best_accuracy_percent": 81.88331627430911,
+          "best_step": 1000
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "siqa",
+          "seed": 42,
+          "run_name": "paper8b_lora_muon_siqa_seed42",
+          "best_accuracy_percent": 81.21801432958034,
+          "best_step": 2000
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "obqa",
+          "seed": 1,
+          "run_name": "paper8b_lora_muon_obqa_seed1",
+          "best_accuracy_percent": 88.0,
+          "best_step": 750
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "obqa",
+          "seed": 42,
+          "run_name": "paper8b_lora_muon_obqa_seed42",
+          "best_accuracy_percent": 87.6,
+          "best_step": 2250
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "qnli",
+          "seed": 1,
+          "run_name": "paper8b_lora_muon_qnli_seed1",
+          "best_accuracy_percent": 95.44206479956068,
+          "best_step": 2000
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "qnli",
+          "seed": 42,
+          "run_name": "paper8b_lora_muon_qnli_seed42",
+          "best_accuracy_percent": 95.33223503569467,
+          "best_step": 2750
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "multi_nli",
+          "seed": 1,
+          "run_name": "paper8b_lora_muon_multi_nli_seed1",
+          "best_accuracy_percent": 90.39225674987264,
+          "best_step": 2250
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "multi_nli",
+          "seed": 42,
+          "run_name": "paper8b_lora_muon_multi_nli_seed42",
+          "best_accuracy_percent": 90.14773306164034,
+          "best_step": 2750
+        }
+      ],
+      "missing": [
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "boolq",
+          "seed": 0
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "piqa",
+          "seed": 0
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "siqa",
+          "seed": 0
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "obqa",
+          "seed": 0
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "qnli",
+          "seed": 0
+        },
+        {
+          "method": "lora_muon",
+          "optimizer": "lora_muon_manifold",
+          "dataset": "multi_nli",
+          "seed": 0
+        }
+      ]
+    },
+    {
+      "method": "LoRA-TSD",
+      "id": "lora_tsd",
+      "optimizer": "lora_tsd",
+      "target_runs": 18,
+      "verified_reusable_runs": 12,
+      "new_runs": 6,
+      "existing": [
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "boolq",
+          "seed": 0,
+          "run_name": "paper8b_lora_tsd_boolq_seed0",
+          "best_accuracy_percent": 89.96941896024465,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "boolq",
+          "seed": 1,
+          "run_name": "paper8b_lora_tsd_boolq_seed1",
+          "best_accuracy_percent": 90.48929663608563,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "piqa",
+          "seed": 0,
+          "run_name": "paper8b_lora_tsd_piqa_seed0",
+          "best_accuracy_percent": 91.34929270946681,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "piqa",
+          "seed": 1,
+          "run_name": "paper8b_lora_tsd_piqa_seed1",
+          "best_accuracy_percent": 89.82589771490751,
+          "best_step": 2250
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "siqa",
+          "seed": 0,
+          "run_name": "paper8b_lora_tsd_siqa_seed0",
+          "best_accuracy_percent": 82.7021494370522,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "siqa",
+          "seed": 1,
+          "run_name": "paper8b_lora_tsd_siqa_seed1",
+          "best_accuracy_percent": 83.06038894575231,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "obqa",
+          "seed": 0,
+          "run_name": "paper8b_lora_tsd_obqa_seed0",
+          "best_accuracy_percent": 88.0,
+          "best_step": 1750
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "obqa",
+          "seed": 1,
+          "run_name": "paper8b_lora_tsd_obqa_seed1",
+          "best_accuracy_percent": 87.8,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "qnli",
+          "seed": 0,
+          "run_name": "paper8b_lora_tsd_qnli_seed0",
+          "best_accuracy_percent": 95.97290865824638,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "qnli",
+          "seed": 1,
+          "run_name": "paper8b_lora_tsd_qnli_seed1",
+          "best_accuracy_percent": 96.10104338275673,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "multi_nli",
+          "seed": 0,
+          "run_name": "paper8b_lora_tsd_multi_nli_seed0",
+          "best_accuracy_percent": 91.31940906775344,
+          "best_step": 3000
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "multi_nli",
+          "seed": 1,
+          "run_name": "paper8b_lora_tsd_multi_nli_seed1",
+          "best_accuracy_percent": 91.51299032093733,
+          "best_step": 3000
+        }
+      ],
+      "missing": [
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "boolq",
+          "seed": 42
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "piqa",
+          "seed": 42
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "siqa",
+          "seed": 42
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "obqa",
+          "seed": 42
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "qnli",
+          "seed": 42
+        },
+        {
+          "method": "lora_tsd",
+          "optimizer": "lora_tsd",
+          "dataset": "multi_nli",
+          "seed": 42
+        }
+      ]
+    },
+    {
+      "method": "Muon FT",
+      "id": "muon_ft",
+      "optimizer": "muon_full",
+      "target_runs": 18,
+      "verified_reusable_runs": 0,
+      "new_runs": 18,
+      "existing": [],
+      "missing": [
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "boolq",
+          "seed": 0
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "boolq",
+          "seed": 1
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "boolq",
+          "seed": 42
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "piqa",
+          "seed": 0
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "piqa",
+          "seed": 1
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "piqa",
+          "seed": 42
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "siqa",
+          "seed": 0
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "siqa",
+          "seed": 1
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "siqa",
+          "seed": 42
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "obqa",
+          "seed": 0
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "obqa",
+          "seed": 1
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "obqa",
+          "seed": 42
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "qnli",
+          "seed": 0
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "qnli",
+          "seed": 1
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "qnli",
+          "seed": 42
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "multi_nli",
+          "seed": 0
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "multi_nli",
+          "seed": 1
+        },
+        {
+          "method": "muon_ft",
+          "optimizer": "muon_full",
+          "dataset": "multi_nli",
+          "seed": 42
+        }
+      ]
+    }
+  ],
+  "queue": [
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "boolq",
+      "seed": 0
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "boolq",
+      "seed": 1
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "boolq",
+      "seed": 42
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "piqa",
+      "seed": 0
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "piqa",
+      "seed": 1
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "piqa",
+      "seed": 42
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "siqa",
+      "seed": 0
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "siqa",
+      "seed": 1
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "siqa",
+      "seed": 42
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "obqa",
+      "seed": 0
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "obqa",
+      "seed": 1
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "obqa",
+      "seed": 42
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "qnli",
+      "seed": 0
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "qnli",
+      "seed": 1
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "qnli",
+      "seed": 42
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "multi_nli",
+      "seed": 0
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "multi_nli",
+      "seed": 1
+    },
+    {
+      "method": "sgd",
+      "optimizer": "lora_sgd",
+      "dataset": "multi_nli",
+      "seed": 42
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "boolq",
+      "seed": 0
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "boolq",
+      "seed": 1
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "boolq",
+      "seed": 42
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "piqa",
+      "seed": 0
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "piqa",
+      "seed": 1
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "piqa",
+      "seed": 42
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "siqa",
+      "seed": 0
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "siqa",
+      "seed": 1
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "siqa",
+      "seed": 42
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "obqa",
+      "seed": 0
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "obqa",
+      "seed": 1
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "obqa",
+      "seed": 42
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "qnli",
+      "seed": 0
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "qnli",
+      "seed": 1
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "qnli",
+      "seed": 42
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "multi_nli",
+      "seed": 0
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "multi_nli",
+      "seed": 1
+    },
+    {
+      "method": "adamw",
+      "optimizer": "adamw",
+      "dataset": "multi_nli",
+      "seed": 42
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "boolq",
+      "seed": 0
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "boolq",
+      "seed": 1
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "boolq",
+      "seed": 42
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "piqa",
+      "seed": 0
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "piqa",
+      "seed": 1
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "piqa",
+      "seed": 42
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "siqa",
+      "seed": 0
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "siqa",
+      "seed": 1
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "siqa",
+      "seed": 42
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "obqa",
+      "seed": 0
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "obqa",
+      "seed": 1
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "obqa",
+      "seed": 42
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "qnli",
+      "seed": 0
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "qnli",
+      "seed": 1
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "qnli",
+      "seed": 42
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "multi_nli",
+      "seed": 0
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "multi_nli",
+      "seed": 1
+    },
+    {
+      "method": "muon",
+      "optimizer": "lora_muon",
+      "dataset": "multi_nli",
+      "seed": 42
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "boolq",
+      "seed": 0
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "boolq",
+      "seed": 1
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "boolq",
+      "seed": 42
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "piqa",
+      "seed": 0
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "piqa",
+      "seed": 1
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "piqa",
+      "seed": 42
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "siqa",
+      "seed": 0
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "siqa",
+      "seed": 1
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "siqa",
+      "seed": 42
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "obqa",
+      "seed": 0
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "obqa",
+      "seed": 1
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "obqa",
+      "seed": 42
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "qnli",
+      "seed": 0
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "qnli",
+      "seed": 1
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "qnli",
+      "seed": 42
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "multi_nli",
+      "seed": 0
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "multi_nli",
+      "seed": 1
+    },
+    {
+      "method": "riem_sgd",
+      "optimizer": "riemannian_sgd",
+      "dataset": "multi_nli",
+      "seed": 42
+    },
+    {
+      "method": "lora_rite",
+      "optimizer": "lora_rite",
+      "dataset": "boolq",
+      "seed": 42
+    },
+    {
+      "method": "lora_rite",
+      "optimizer": "lora_rite",
+      "dataset": "piqa",
+      "seed": 42
+    },
+    {
+      "method": "lora_rite",
+      "optimizer": "lora_rite",
+      "dataset": "siqa",
+      "seed": 42
+    },
+    {
+      "method": "lora_rite",
+      "optimizer": "lora_rite",
+      "dataset": "obqa",
+      "seed": 42
+    },
+    {
+      "method": "lora_rite",
+      "optimizer": "lora_rite",
+      "dataset": "qnli",
+      "seed": 42
+    },
+    {
+      "method": "lora_rite",
+      "optimizer": "lora_rite",
+      "dataset": "multi_nli",
+      "seed": 42
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "boolq",
+      "seed": 1
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "boolq",
+      "seed": 42
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "piqa",
+      "seed": 1
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "piqa",
+      "seed": 42
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "siqa",
+      "seed": 1
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "siqa",
+      "seed": 42
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "obqa",
+      "seed": 0
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "obqa",
+      "seed": 1
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "obqa",
+      "seed": 42
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "qnli",
+      "seed": 0
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "qnli",
+      "seed": 1
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "qnli",
+      "seed": 42
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "multi_nli",
+      "seed": 0
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "multi_nli",
+      "seed": 1
+    },
+    {
+      "method": "riemannion_original",
+      "optimizer": "riemannion_original",
+      "dataset": "multi_nli",
+      "seed": 42
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "boolq",
+      "seed": 1
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "boolq",
+      "seed": 42
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "piqa",
+      "seed": 1
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "piqa",
+      "seed": 42
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "siqa",
+      "seed": 1
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "siqa",
+      "seed": 42
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "obqa",
+      "seed": 0
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "obqa",
+      "seed": 1
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "obqa",
+      "seed": 42
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "qnli",
+      "seed": 0
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "qnli",
+      "seed": 1
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "qnli",
+      "seed": 42
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "multi_nli",
+      "seed": 0
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "multi_nli",
+      "seed": 1
+    },
+    {
+      "method": "lora_pro",
+      "optimizer": "lora_pro",
+      "dataset": "multi_nli",
+      "seed": 42
+    },
+    {
+      "method": "lora_muon",
+      "optimizer": "lora_muon_manifold",
+      "dataset": "boolq",
+      "seed": 0
+    },
+    {
+      "method": "lora_muon",
+      "optimizer": "lora_muon_manifold",
+      "dataset": "piqa",
+      "seed": 0
+    },
+    {
+      "method": "lora_muon",
+      "optimizer": "lora_muon_manifold",
+      "dataset": "siqa",
+      "seed": 0
+    },
+    {
+      "method": "lora_muon",
+      "optimizer": "lora_muon_manifold",
+      "dataset": "obqa",
+      "seed": 0
+    },
+    {
+      "method": "lora_muon",
+      "optimizer": "lora_muon_manifold",
+      "dataset": "qnli",
+      "seed": 0
+    },
+    {
+      "method": "lora_muon",
+      "optimizer": "lora_muon_manifold",
+      "dataset": "multi_nli",
+      "seed": 0
+    },
+    {
+      "method": "lora_tsd",
+      "optimizer": "lora_tsd",
+      "dataset": "boolq",
+      "seed": 42
+    },
+    {
+      "method": "lora_tsd",
+      "optimizer": "lora_tsd",
+      "dataset": "piqa",
+      "seed": 42
+    },
+    {
+      "method": "lora_tsd",
+      "optimizer": "lora_tsd",
+      "dataset": "siqa",
+      "seed": 42
+    },
+    {
+      "method": "lora_tsd",
+      "optimizer": "lora_tsd",
+      "dataset": "obqa",
+      "seed": 42
+    },
+    {
+      "method": "lora_tsd",
+      "optimizer": "lora_tsd",
+      "dataset": "qnli",
+      "seed": 42
+    },
+    {
+      "method": "lora_tsd",
+      "optimizer": "lora_tsd",
+      "dataset": "multi_nli",
+      "seed": 42
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "boolq",
+      "seed": 0
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "boolq",
+      "seed": 1
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "boolq",
+      "seed": 42
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "piqa",
+      "seed": 0
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "piqa",
+      "seed": 1
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "piqa",
+      "seed": 42
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "siqa",
+      "seed": 0
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "siqa",
+      "seed": 1
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "siqa",
+      "seed": 42
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "obqa",
+      "seed": 0
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "obqa",
+      "seed": 1
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "obqa",
+      "seed": 42
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "qnli",
+      "seed": 0
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "qnli",
+      "seed": 1
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "qnli",
+      "seed": 42
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "multi_nli",
+      "seed": 0
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "multi_nli",
+      "seed": 1
+    },
+    {
+      "method": "muon_ft",
+      "optimizer": "muon_full",
+      "dataset": "multi_nli",
+      "seed": 42
+    }
+  ],
+  "protocol_sources": [
+    "tmp/lora_tsd_cloud_bootstrap/scripts/brain_lab/paper_8b_methods.json",
+    "artifacts/paper_8b_additional_seeds_20261025/completed-run-metrics.json",
+    "artifacts/paper_8b_additional_seeds_20261025/excluded-completed-run-metrics-20261026T063558.json"
+  ],
+  "method_manifest_sha256": "698ecb9aa7140d9278727e76005cc1c645ae85e84ae8b8874327a948d8d20e36",
+  "qualifications": [
+    "Riemannion means RiemannionOriginal for this draft. The older optimizer used by the printed table is a different arm. Exact legacy-table replication would have zero reusable Riemannion runs, requiring141 total new runs instead of138.",
+    "Printed table baseline run IDs, seeds and exact histories remain unverified. Printed rounded scores are not counted as reusable raw runs. Recovered matching raw runs may reduce this queue.",
+    "Earlier six seed42 RiemannionOriginal runs had2500updates and are not credited to this3000-update grid.",
+    "Preserve saved per-method actual LR schedules, initialization and optimizer semantics. SGD momentum, inactive scheduler flags, and LoRA-Pro initialization discrepancies require explicit documentation.",
+    "No jobs submitted, no old queues resumed, no source or hyperparameter changes made.",
+    "Latest available saved storage snapshot13Nov10:02MSK showsNFS2available0; live telemetry unavailable. Before anyCloudlaunch verify actual bootstrap destination and every affected filesystem, strictly>5e9bytes and enough headroom for planned writes. No launch through fullNFS2.",
+    "One persistent model copy~16.07GB plus pinned train/required validation Parquet249494929bytes. No checkpoints or duplicate model copies.",
+    "Cloud runtime, installed libraries, model cache, exact command generation, safe batch profiling and fixed runner/source checks remain prelaunch requirements.",
+    "Muon FT means full Q/K/V projection weights in the recorded source, not all8Bmodelweights."
+  ]
+}

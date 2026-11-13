@@ -1,0 +1,62 @@
+{
+  "boolq/default/train/0000.parquet": {
+    "bytes": 3685146,
+    "sha256": "4f028e992c0bd4df30b9f056f4946b64f5c23028034ff0ed5ea467d8538cc623",
+    "url": "https://huggingface.co/datasets/google/boolq/resolve/d89fc6ef4da46f056176dcf941ba670524ab1c87/default/train/0000.parquet"
+  },
+  "boolq/default/validation/0000.parquet": {
+    "bytes": 1257630,
+    "sha256": "52355d11524b4b874a9b9dcc278feb10f672d52c4f4eff9872e695ede59820f8",
+    "url": "https://huggingface.co/datasets/google/boolq/resolve/d89fc6ef4da46f056176dcf941ba670524ab1c87/default/validation/0000.parquet"
+  },
+  "piqa/plain_text/train/0000.parquet": {
+    "bytes": 2657677,
+    "sha256": "29da7ec1f20f0e1cbc56cdaccbab02cdc8844c8c02611d01b218cabcc898b877",
+    "url": "https://huggingface.co/datasets/ybisk/piqa/resolve/142c51238b3ca2bc61e9a075913871b8b600e8e1/plain_text/train/0000.parquet"
+  },
+  "piqa/plain_text/validation/0000.parquet": {
+    "bytes": 301200,
+    "sha256": "40e1677bba609c8801deacc171d76f3e24c083f365c95a1cbda7520c923dfea2",
+    "url": "https://huggingface.co/datasets/ybisk/piqa/resolve/142c51238b3ca2bc61e9a075913871b8b600e8e1/plain_text/validation/0000.parquet"
+  },
+  "siqa/default/train/0000.parquet": {
+    "bytes": 3475355,
+    "sha256": "7c4fabfbb03842c565303e30b84bf52189981a4c10610d2eb84ebb410a62e630",
+    "url": "https://huggingface.co/datasets/allenai/social_i_qa/resolve/537a2ec8ec565adc0b70b70752893e59e024df26/default/train/0000.parquet"
+  },
+  "siqa/default/validation/0000.parquet": {
+    "bytes": 203280,
+    "sha256": "23c22ee065bf57b77b775f1c90e7a277a39fd39d386bd7bcc9e3f212e3f35197",
+    "url": "https://huggingface.co/datasets/allenai/social_i_qa/resolve/537a2ec8ec565adc0b70b70752893e59e024df26/default/validation/0000.parquet"
+  },
+  "obqa/main/train/0000.parquet": {
+    "bytes": 495845,
+    "sha256": "98148f8a54e62eb862346a75192d5fb824d6cbb68f2f59aecd793d39ecb5cd8b",
+    "url": "https://huggingface.co/datasets/allenai/openbookqa/resolve/ff32d06f3b17a43c2042765b39a22ba55a0d41f9/main/train/0000.parquet"
+  },
+  "obqa/main/validation/0000.parquet": {
+    "bytes": 58233,
+    "sha256": "35370b9cfee8c1ff325ccc74adc434d12c47ca0ac3244aa87f3fa77069285206",
+    "url": "https://huggingface.co/datasets/allenai/openbookqa/resolve/ff32d06f3b17a43c2042765b39a22ba55a0d41f9/main/validation/0000.parquet"
+  },
+  "qnli/default/train/0000.parquet": {
+    "bytes": 17585373,
+    "sha256": "75b4c696190e6e45b2aa2ce8a9cb535828c45d07f5dfc1dbb9dd1a2a5dd52ced",
+    "url": "https://huggingface.co/datasets/SetFit/qnli/resolve/b527965e0f4a32f9aa1e06327c0eaf4ed5c92d6d/default/train/0000.parquet"
+  },
+  "qnli/default/validation/0000.parquet": {
+    "bytes": 874959,
+    "sha256": "d6cbf42e0497d7fb9c0c7a69f20087b3049f9bb41be6ab69e51f34f45c24c4de",
+    "url": "https://huggingface.co/datasets/SetFit/qnli/resolve/b527965e0f4a32f9aa1e06327c0eaf4ed5c92d6d/default/validation/0000.parquet"
+  },
+  "multi_nli/default/train/0000.parquet": {
+    "bytes": 213961663,
+    "sha256": "1c1de03640b168e410aabfca19e7cc2f3dfcd7f0e126e935674e56fb102c4529",
+    "url": "https://huggingface.co/datasets/nyu-mll/multi_nli/resolve/d6551022f184031474f8f9cc1bb794f28d7eb3b3/default/train/0000.parquet"
+  },
+  "multi_nli/default/validation_matched/0000.parquet": {
+    "bytes": 4938568,
+    "sha256": "350c26950b55f460b50d36c76aef87d64b49c78812d7abf7bf97e5fede10f186",
+    "url": "https://huggingface.co/datasets/nyu-mll/multi_nli/resolve/d6551022f184031474f8f9cc1bb794f28d7eb3b3/default/validation_matched/0000.parquet"
+  }
+}
