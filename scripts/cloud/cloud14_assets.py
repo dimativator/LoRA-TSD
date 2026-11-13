@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 
 from cloud14_core import ASSETS, CAMPAIGN, STATE, REVISION, digest, locked, now, require_space, save
@@ -75,6 +76,19 @@ def prepare() -> None:
         # W&B must be usable before spending time or space downloading the model.
         subprocess.run([str(PYTHON), "-c", "import wandb; api=wandb.Api(timeout=45); "
                         "assert api.viewer; print('WANDB_AUTHENTICATED')"], check=True)
+        import wandb
+        with tempfile.TemporaryDirectory(prefix="paper8b-wandb-preflight-") as temporary:
+            run = wandb.init(entity="andrey", project="LoRA-Muon", group=CAMPAIGN,
+                             name=CAMPAIGN + "-preflight", job_type="preflight",
+                             mode="online", dir=temporary,
+                             settings=wandb.Settings(save_code=False, disable_git=True))
+            run.log({"preflight/success": 1, "model_revision": REVISION})
+            run_path, run_url = run.path, run.url
+            run.finish(exit_code=0)
+            remote = wandb.Api(timeout=45).run(run_path)
+            assert remote.summary["preflight/success"] == 1
+            save(STATE / "wandb-preflight.json", {"timestamp": now(), "url": run_url,
+                                                "verified_online": True})
         ASSETS.mkdir(parents=True, exist_ok=True)
         ownership = ASSETS / "ownership.json"
         expected = {"campaign": CAMPAIGN, "root": str(ASSETS.resolve())}

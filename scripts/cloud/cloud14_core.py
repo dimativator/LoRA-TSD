@@ -17,6 +17,7 @@ RESERVE = 5_000_000_000
 ASSETS = Path("/home/jovyan/dimativator-paper8b-three-seeds-20261113/assets")
 STATE = Path("/home/jovyan/shares/SR006.nfs3/dimativator-paper8b-three-seeds-20261113")
 REVISION = "d04e592bb4f6aa9cfee91e2e20afa771667e1d4b"
+TELEMETRY_PYTHON = os.readlink("/proc/self/exe") if Path("/proc/self/exe").exists() else sys.executable
 
 
 def now() -> str:
@@ -57,7 +58,7 @@ def _raw_disk_records(paths: list[Path]) -> list[dict]:
 
 def disk_records(paths: list[Path]) -> list[dict]:
     """A hung network filesystem must never hang the process guard itself."""
-    process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "disk"],
+    process = subprocess.Popen([TELEMETRY_PYTHON, str(Path(__file__).resolve()), "disk"],
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                text=True)
     try:
@@ -150,6 +151,7 @@ def cleanup_owned_assets(root: Path, state: Path, confirmation: dict) -> int:
     assert confirmation["wandb_sync_verified"] is True
     assert confirmation["results_export_verified"] is True
     assert confirmation["all_owned_jobs_terminal"] is True
+    assert not list((state / "pending-wandb-sync").glob("*")), "Unverified recovery logs remain"
     assert not root.is_symlink()
     marker = json.loads((root / "ownership.json").read_text())
     assert marker["campaign"] == CAMPAIGN and marker["root"] == str(root.resolve())

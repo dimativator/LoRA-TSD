@@ -25,6 +25,8 @@ HERE = Path(__file__).resolve().parent
 def unpack() -> Path:
     bundle = HERE / "cloud14_frozen_runtime.zip"
     expected = (HERE / "cloud14_frozen_runtime.sha256").read_text().strip()
+    if os.environ.get("PAPER8B_BUNDLE_SHA256"):
+        assert expected == os.environ["PAPER8B_BUNDLE_SHA256"], "Submitted runtime hash differs"
     assert digest(bundle) == expected, "Frozen runtime bundle mismatch"
     target = Path(tempfile.gettempdir()) / ("paper8b-frozen-" + expected[:16])
     from cloud14_core import locked
@@ -285,7 +287,7 @@ def run_task(task: dict, worker: int, frozen: Path, env: dict) -> None:
                 recovery = STATE / "pending-wandb-sync" / (key + f"-{os.getpid()}")
                 require_space(affected_paths(), {recovery: sum(p.stat().st_size for p in directory.rglob("*") if p.is_file())})
                 recovery.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                shutil.copytree(directory, recovery, symlinks=True)
+                shutil.copytree(directory, recovery, symlinks=False)
                 status["recovery_logs"] = str(recovery)
                 save(status_path, status)
             print("PAPER8B_FAILURE=" + json.dumps(status), flush=True)
