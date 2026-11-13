@@ -9,6 +9,8 @@ import math
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 
 CAMPAIGN = "paper8b-three-seeds-20261113"
 RESERVE = 5_000_000_000
@@ -36,7 +38,7 @@ def digest(path: Path) -> str:
     return result.hexdigest()
 
 
-def disk_records(paths: list[Path]) -> list[dict]:
+def _raw_disk_records(paths: list[Path]) -> list[dict]:
     result = []
     for requested in paths:
         path = requested
@@ -51,6 +53,22 @@ def disk_records(paths: list[Path]) -> list[dict]:
                        "device": path.stat().st_dev,
                        "status": "ok" if available > RESERVE else "stop"})
     return result
+
+
+def disk_records(paths: list[Path]) -> list[dict]:
+    """A hung network filesystem must never hang the process guard itself."""
+    process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "disk"],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True)
+    try:
+        output, error = process.communicate(json.dumps([str(path) for path in paths]), timeout=15)
+    except subprocess.TimeoutExpired as error:
+        process.kill()
+        # Do not wait again: a kernel-blocked NFS stat may not reap until the mount recovers.
+        raise OSError("Disk telemetry timed out after15seconds") from error
+    if process.returncode:
+        raise OSError("Disk telemetry failed: " + error[-1500:])
+    return json.loads(output)
 
 
 def require_space(paths: list[Path], planned: dict[Path, int] | None = None) -> list[dict]:
@@ -148,3 +166,8 @@ def cleanup_owned_assets(root: Path, state: Path, confirmation: dict) -> int:
     save(state / "cleanup.json", {"completed_at": now(), "root": str(root),
                                   "removed_bytes": size, "confirmation": confirmation})
     return size
+
+
+if __name__ == "__main__":
+    assert sys.argv[1:] == ["disk"]
+    print(json.dumps(_raw_disk_records([Path(path) for path in json.loads(sys.stdin.read())])))

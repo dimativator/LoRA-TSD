@@ -71,7 +71,7 @@ def prepare() -> None:
                             "assert torch.__version__.startswith('2.8.0'); print('RUNTIME_IMPORTS_PASS')"], check=True)
             save(VENV / "ready.json", {"timestamp": now(), "requirements": REQUIREMENTS})
         if Path(sys.prefix) != VENV:
-            os.execv(str(PYTHON), [str(PYTHON), str(HERE / "cloud14_entry.py"), "prepare"])
+            os.execv(str(PYTHON), [str(PYTHON), str(HERE / "cloud14_entry.py"), "prepare-child"])
         # W&B must be usable before spending time or space downloading the model.
         subprocess.run([str(PYTHON), "-c", "import wandb; api=wandb.Api(timeout=45); "
                         "assert api.viewer; print('WANDB_AUTHENTICATED')"], check=True)

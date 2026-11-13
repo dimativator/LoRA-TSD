@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import runpy
+import shutil
 import signal
 import subprocess
 import sys
@@ -26,14 +27,16 @@ def unpack() -> Path:
     expected = (HERE / "cloud14_frozen_runtime.sha256").read_text().strip()
     assert digest(bundle) == expected, "Frozen runtime bundle mismatch"
     target = Path(tempfile.gettempdir()) / ("paper8b-frozen-" + expected[:16])
-    if not (target / "ready").exists():
-        target.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(io.BytesIO(bundle.read_bytes())) as archive:
-            for info in archive.infolist():
-                assert (target / info.filename).resolve().is_relative_to(target.resolve())
-                assert not (info.external_attr >> 16) & 0o170000 == 0o120000
-            archive.extractall(target)
-        (target / "ready").write_text(expected)
+    from cloud14_core import locked
+    with locked(target.with_suffix(".lock")):
+        if not (target / "ready").exists():
+            target.mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(io.BytesIO(bundle.read_bytes())) as archive:
+                for info in archive.infolist():
+                    assert (target / info.filename).resolve().is_relative_to(target.resolve())
+                    assert not (info.external_attr >> 16) & 0o170000 == 0o120000
+                archive.extractall(target)
+            (target / "ready").write_text(expected)
     return target
 
 
@@ -268,12 +271,23 @@ def run_task(task: dict, worker: int, frozen: Path, env: dict) -> None:
             status.update(phase="failed", failed_at=now(), error_type=type(error).__name__,
                           error=str(error), returncode=status.get("returncode"))
             save(status_path, status)
-            if run is not None:
-                for file in directory.rglob("*.log"):
-                    run.save(str(file), base_path=str(directory), policy="now")
-                for file in directory.rglob("*.jsonl"):
-                    run.save(str(file), base_path=str(directory), policy="now")
-                run.finish(exit_code=1)
+            try:
+                if run is not None:
+                    for file in directory.rglob("*.log"):
+                        run.save(str(file), base_path=str(directory), policy="now")
+                    for file in directory.rglob("*.jsonl"):
+                        run.save(str(file), base_path=str(directory), policy="now")
+                    run.finish(exit_code=1)
+            finally:
+                # An upload exception must not discard the only raw histories. This
+                # temporary log spool is removed after independently verified sync.
+                assert not list(directory.rglob("*.pt")) and not list(directory.rglob("*.safetensors"))
+                recovery = STATE / "pending-wandb-sync" / (key + f"-{os.getpid()}")
+                require_space(affected_paths(), {recovery: sum(p.stat().st_size for p in directory.rglob("*") if p.is_file())})
+                recovery.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                shutil.copytree(directory, recovery, symlinks=True)
+                status["recovery_logs"] = str(recovery)
+                save(status_path, status)
             print("PAPER8B_FAILURE=" + json.dumps(status), flush=True)
             raise
 
@@ -315,6 +329,7 @@ def worker(worker_id: int) -> None:
 def pair(pair_id: int) -> None:
     assert pair_id in range(7)
     assert os.environ.get("OMPI_COMM_WORLD_RANK", "0") == "0", "Only one coordinator per allocation"
+    unpack()
     query = subprocess.run(["nvidia-smi", "--query-gpu=index,uuid,memory.total,memory.free",
                             "--format=csv,noheader,nounits"], capture_output=True, text=True, check=True)
     devices = [line.split(",")[1].strip() for line in query.stdout.splitlines() if line.strip()]
@@ -343,6 +358,16 @@ def inspect() -> None:
 
 def dispatch(args) -> None:
     if args.mode == "prepare":
+        with tempfile.TemporaryDirectory(prefix="paper8b-prepare-") as temporary:
+            directory = Path(temporary)
+            status = {"phase": "preparing_assets", "started_at": now()}
+            command = [sys.executable, str(HERE / "cloud14_entry.py"), "prepare-child"]
+            with owned_process(command, directory, os.environ.copy()) as process:
+                watch(process, directory, status, STATE / "prepare-status.json")
+            print((directory / "process.log").read_text()[-20000:], flush=True)
+            if process.returncode:
+                raise RuntimeError(f"Asset preparation exited{process.returncode}; inspect before retry")
+    elif args.mode == "prepare-child":
         prepare()
     elif args.mode == "profile":
         profile_main(args)
