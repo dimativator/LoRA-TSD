@@ -16,7 +16,7 @@ import threading
 import time
 import zipfile
 
-from cloud14_core import ASSETS, CAMPAIGN, STATE, claim, digest, now, require_space, save, task_key, validate_plan, verify_rows, wandb_row
+from cloud14_core import ASSETS, CAMPAIGN, STATE, claim, digest, disk_records, now, require_space, save, task_key, validate_plan, verify_rows, wandb_row
 from cloud14_assets import PYTHON, affected_paths, configured_environment, prepare
 
 HERE = Path(__file__).resolve().parent
@@ -264,6 +264,9 @@ def run_task(task: dict, worker: int, frozen: Path, env: dict) -> None:
             for file in [directory / "history.jsonl", directory / ("paper8b_" + key + ".json"),
                          directory / "process.log"]:
                 run.save(str(file), base_path=str(directory), policy="now")
+            for file in list(directory.glob("cloud*/*.log")) + list(directory.glob("cloud*/*.jsonl")):
+                run.save(str(file), base_path=str(directory), policy="now")
+            run.save(str(directory / "disk-guard.jsonl"), base_path=str(directory), policy="now")
             run.finish(exit_code=0)
             run = None
             status.update(phase="complete", wandb_sync_complete=True, completed_at=now(),
@@ -352,8 +355,15 @@ def pair(pair_id: int) -> None:
 
 
 def inspect() -> None:
+    ready = ASSETS / "ready.json"
+    preparation = STATE / "prepare-status.json"
     print("PAPER8B_INSPECTION=" + json.dumps({"timestamp": now(),
-          "filesystems": require_space(affected_paths()),
+          "filesystems": disk_records(affected_paths()),
+          "assets_ready": ready.exists(),
+          "assets_ready_record": json.loads(ready.read_text()) if ready.exists() else None,
+          "asset_files": [{"path": str(path.relative_to(ASSETS)), "bytes": path.stat().st_size}
+                          for path in ASSETS.rglob("*") if path.is_file()] if ASSETS.exists() else [],
+          "preparation": json.loads(preparation.read_text()) if preparation.exists() else None,
           "tasks": [json.loads(path.read_text()) for path in sorted((STATE / "tasks").glob("*.json"))],
           "workers": [json.loads(path.read_text()) for path in sorted((STATE / "workers").glob("*.json"))]}), flush=True)
 
