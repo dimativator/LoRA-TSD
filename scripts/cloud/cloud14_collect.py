@@ -27,8 +27,10 @@ def main() -> None:
                             input=remote, capture_output=True, text=True, timeout=120)
     text = result.stdout + result.stderr
     (ARTIFACTS / "inspection-latest.log").write_text(text)
-    result.check_returncode()
+    # mlsub can return nonzero after printing a completed job's intact logs.
+    # Accept only a complete gzip/CRC-verified snapshot, preserving that exit code.
     snapshot = decode_snapshot(text)
+    snapshot["collector_transport_returncode"] = result.returncode
     save(ARTIFACTS / "inspection-latest.json", snapshot)
     with locked(ARTIFACTS / "submission.lock"):
         campaign = json.loads((ARTIFACTS / "campaign.json").read_text())
