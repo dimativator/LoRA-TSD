@@ -16,7 +16,7 @@ ARTIFACTS = WORKSPACE / "artifacts/paper_8b_three_seeds_cloud_20261113"
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["prepare", "pair", "inspect", "preflight", "reset-unstarted", "reserve-v2", "retry-failed", "cleanup"])
+    parser.add_argument("mode", choices=["prepare", "pair", "inspect", "preflight", "reset-unstarted", "reserve-v2", "retry-failed", "cleanup", "final-audit"])
     parser.add_argument("--pair-id", type=int, choices=range(7))
     args = parser.parse_args()
     if args.mode == "pair" and args.pair_id is None:
@@ -67,6 +67,9 @@ def main() -> None:
                    "--entry", "scripts/cloud/cloud14_entry.py", "--args", run_args,
                    "--gpus", "2" if args.mode == "pair" else "cpu", "--image", "torch28", "--no-pip",
                    "--note", f"paper8b_3seed_{intent}_20261113"]
+        if args.mode == "final-audit":
+            command[command.index("--entry") + 1] = "scripts/cloud/cloud14_final_audit.py"
+            command[command.index("--args") + 1] = "inventory"
         for key, value in environment.items():
             command.extend(["--env", key + "=" + value])
         remote = "import subprocess,json\ncommand=" + repr(command) + "\n"
