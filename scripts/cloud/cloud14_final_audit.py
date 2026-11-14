@@ -56,11 +56,17 @@ def recovery_inventory(state: Path, check_space: Callable[[], object] | None = N
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["inventory"], nargs="?", default="inventory")
-    parser.parse_args()
+    parser.add_argument("mode", choices=["inventory", "upload", "archive", "upload-child", "archive-child"],
+                        nargs="?", default="inventory")
+    parser.add_argument("--work-dir", type=Path)
+    args = parser.parse_args()
     filesystems = require_space(affected_paths())
     if STATE.is_symlink() or ASSETS.is_symlink():
         raise ValueError("Campaign state or assets is a symlink")
+    if args.mode != "inventory":
+        from cloud14_recovery_sync import dispatch
+        if not dispatch(args.mode, args.work_dir):
+            return
     inventory = recovery_inventory(STATE, lambda: require_space(affected_paths()))
     snapshot = {"timestamp": now(), "campaign": CAMPAIGN, "audit_type": "final_read_only",
                 "filesystems": filesystems, "pending_wandb_sync": inventory,
@@ -68,6 +74,8 @@ def main() -> None:
                 "assets_exist": ASSETS.exists(), "assets_symlink": ASSETS.is_symlink(),
                 "ownership": read_record(ASSETS / "ownership.json"),
                 "cleanup": read_record(STATE / "cleanup.json"),
+                "recovery_upload": read_record(STATE / "recovery-upload.json"),
+                "recovery_reconciled": read_record(STATE / "recovery-reconciled.json"),
                 "worker_phases": record_phases(STATE / "workers"),
                 "task_phases": record_phases(STATE / "tasks")}
     snapshot["filesystems_after"] = require_space(affected_paths())

@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from cloud14_core import encode_audit_environment, now, save
+from cloud14_core import digest, encode_audit_environment, now, save
 
 WORKSPACE = Path(__file__).resolve().parents[4]
 ARTIFACTS = WORKSPACE / "artifacts/paper_8b_three_seeds_cloud_20261113"
@@ -16,7 +16,7 @@ ARTIFACTS = WORKSPACE / "artifacts/paper_8b_three_seeds_cloud_20261113"
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["prepare", "pair", "inspect", "preflight", "reset-unstarted", "reserve-v2", "retry-failed", "cleanup", "final-audit"])
+    parser.add_argument("mode", choices=["prepare", "pair", "inspect", "preflight", "reset-unstarted", "reserve-v2", "retry-failed", "cleanup", "final-audit", "recovery-upload", "recovery-archive"])
     parser.add_argument("--pair-id", type=int, choices=range(7))
     args = parser.parse_args()
     if args.mode == "pair" and args.pair_id is None:
@@ -52,8 +52,29 @@ def main() -> None:
             assert audit["verified_runs"] == 180 and audit["all_owned_jobs_terminal"] is True
             assert audit["wandb_sync_verified"] is True and audit["results_export_verified"] is True
             environment.update(encode_audit_environment("PAPER8B_FINAL_CLEANUP_AUDIT", audit))
+        if args.mode in ["recovery-upload", "recovery-archive"]:
+            terminal = json.loads((ARTIFACTS / "all-owned-allocations-terminal.json").read_text())
+            assert terminal["all_owned_jobs_terminal"] is True
+            owned = {job["job_id"] for job in campaign["jobs"]}
+            for history in campaign.get("allocation_history", []):
+                owned.update(job["job_id"] for job in history["jobs"])
+            assert len(terminal["jobs"]) == len(owned)
+            assert {job["job_id"] for job in terminal["jobs"]} == owned
+            assert all(job["status"].lower() in ["completed", "failed", "stopped", "cancelled", "canceled"]
+                       for job in terminal["jobs"])
+            assert campaign["verified_completed"] == 180
+            audit = {"campaign": "paper8b-three-seeds-20261113", "verified_runs": 180,
+                     "all_owned_jobs_terminal": True,
+                     "terminal_audit_sha256": digest(ARTIFACTS / "all-owned-allocations-terminal.json")}
+            prefix = "PAPER8B_RECOVERY_AUDIT"
+            if args.mode == "recovery-archive":
+                verification = json.loads((ARTIFACTS / "recovery-sync-verification.json").read_text())
+                assert verification["all_unique_files_downloaded_sha256_verified"] is True
+                audit.update(verification)
+                prefix = "PAPER8B_RECOVERY_CONFIRM"
+            environment.update(encode_audit_environment(prefix, audit))
         secrets = []
-        if args.mode in ["prepare", "pair"]:
+        if args.mode in ["prepare", "pair", "recovery-upload"]:
             key = netrc.netrc().authenticators("wandb-radfan.ru")[2]
             environment["WANDB_API_KEY"] = key
             secrets.append(key)
@@ -70,6 +91,9 @@ def main() -> None:
         if args.mode == "final-audit":
             command[command.index("--entry") + 1] = "scripts/cloud/cloud14_final_audit.py"
             command[command.index("--args") + 1] = "inventory"
+        if args.mode in ["recovery-upload", "recovery-archive"]:
+            command[command.index("--entry") + 1] = "scripts/cloud/cloud14_final_audit.py"
+            command[command.index("--args") + 1] = args.mode.removeprefix("recovery-")
         for key, value in environment.items():
             command.extend(["--env", key + "=" + value])
         remote = "import subprocess,json\ncommand=" + repr(command) + "\n"
