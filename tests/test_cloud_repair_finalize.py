@@ -276,3 +276,13 @@ def test_deferred_cpu_observation_blocks_final_cleanup_authority(complete):
     with pytest.raises(ValueError, match="Deferred CPU observation"):
         final.finalize(*complete)
     assert not (complete[0]/"cleanup-authorization.json").exists()
+
+
+def test_received_late_allocation_conflict_blocks_final_cleanup_authority(complete):
+    def conflict(value):
+        value['jobs'][0]['recovery_conflict']={'reason':'Late receipt exposed another allocation'}
+        value['jobs'][0]['observed_job_ids']=[value['jobs'][0]['job_id'],'lm-mpi-job-extra']
+    modify(complete,'campaign.json',conflict)
+    with pytest.raises(ValueError,match='Received allocation conflict'):
+        final.finalize(*complete)
+    assert not (complete[0]/'cleanup-authorization.json').exists()

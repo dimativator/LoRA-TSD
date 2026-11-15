@@ -97,7 +97,7 @@ def test_recovery_same_id_missing_note_metadata_is_not_silently_dropped(ledger, 
 
 
 @pytest.mark.parametrize("mode", ["preflight", "inspect", "worker"])
-def test_submission_waits_for_240_second_create_without_changing_exact_command(ledger, monkeypatch, capsys, mode):
+def test_submission_waits_for_900_second_create_without_changing_exact_command(ledger, monkeypatch, capsys, mode):
     root, value = ledger
     value.update(ambiguous_submissions=[], source_revision="reviewed-dev-revision",
                  review_passed=True, assets_ready_verified=True,
@@ -111,14 +111,14 @@ def test_submission_waits_for_240_second_create_without_changing_exact_command(l
     calls = []
     def run(command, **kwargs):
         calls.append(command)
-        assert kwargs["timeout"] == 305
+        assert kwargs["timeout"] == 965
         tree = ast.parse(kwargs["input"])
         remote_command = ast.literal_eval(next(node.value for node in tree.body
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name)
                 and target.id == "command" for target in node.targets)))
         run_calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
                      and isinstance(node.func, ast.Attribute) and node.func.attr == "run"]
-        assert [next(k.value.value for k in node.keywords if k.arg == "timeout") for node in run_calls] == [50, 240]
+        assert [next(k.value.value for k in node.keywords if k.arg == "timeout") for node in run_calls] == [50, 900]
         assert remote_command[:2] == ["mlsub", "run"]
         expected = {"--repo": "https://github.com/dimativator/LoRA-TSD", "--branch": "dev",
                     "--entry": "scripts/cloud/cloud_repair_entry.py", "--image": "torch28",
@@ -146,9 +146,9 @@ def test_extended_submission_timeout_preserves_intent_and_blocks_duplicate(ledge
     submit.save(root / "campaign.json", value)
     monkeypatch.setattr(sys, "argv", ["cloud_repair_submit.py", "preflight"])
     def timeout(command, **kwargs):
-        assert kwargs["timeout"] == 305
-        assert "timeout=50" in kwargs["input"] and "timeout=240" in kwargs["input"]
-        raise submit.subprocess.TimeoutExpired(command, 305)
+        assert kwargs["timeout"] == 965
+        assert "timeout=50" in kwargs["input"] and "timeout=900" in kwargs["input"]
+        raise submit.subprocess.TimeoutExpired(command, 965)
     monkeypatch.setattr(submit.subprocess, "run", timeout)
     with pytest.raises(RuntimeError, match="response lost"):
         submit.main()
@@ -262,7 +262,7 @@ def mock_create(monkeypatch, root, mode, worker=None, job=SECOND, timeout=False)
         current = json.loads((root / "campaign.json").read_text())
         assert len({r["note"] for r in current["ambiguous_submissions"]}) == len(current["ambiguous_submissions"])
         if timeout:
-            raise submit.subprocess.TimeoutExpired("ssh", 305)
+            raise submit.subprocess.TimeoutExpired("ssh", 965)
         return SimpleNamespace(returncode=0, stdout=job, stderr="")
     monkeypatch.setattr(submit.subprocess, "run", create)
     return calls
@@ -430,7 +430,7 @@ def test_partial_timeout_ids_are_recorded_and_redacted_without_adoption(ledger, 
     mock_create(monkeypatch, root, "worker", 0)
     def timeout(*args, **kwargs):
         raw = (JOB + (" " + SECOND if multiple else "") + " test-key-not-real").encode()
-        raise submit.subprocess.TimeoutExpired("ssh", 305, output=raw, stderr=b"partial transport")
+        raise submit.subprocess.TimeoutExpired("ssh", 965, output=raw, stderr=b"partial transport")
     monkeypatch.setattr(submit.subprocess, "run", timeout)
     with pytest.raises(RuntimeError, match="response lost"): submit.main()
     current = json.loads((root / "campaign.json").read_text())
@@ -448,7 +448,7 @@ def test_worker_verbose_only_changes_logger_flag_and_discards_all_raw_stderr(mon
     arbitrary = 'arbitrary-admin-credential-not-in-secrets'
     def run(actual, **kwargs):
         calls.append(actual)
-        assert kwargs == dict(capture_output=True, text=True, timeout=240)
+        assert kwargs == dict(capture_output=True, text=True, timeout=900)
         return SimpleNamespace(returncode=0, stdout=JOB + ' known-secret', stderr=(
             'Authorization: Bearer ' + arbitrary + '\n'
             'HTTP Request: POST https://api.example/jobs?token=' + arbitrary + ' "HTTP/1.1 503 Service Unavailable"\n'
@@ -471,7 +471,7 @@ def test_worker_verbose_only_changes_logger_flag_and_discards_all_raw_stderr(mon
 def test_remote_worker_timeout_preserves_only_sanitized_metadata_and_partial_stdout(monkeypatch, capsys):
     arbitrary = 'unknown-admin-secret'
     def run(*args, **kwargs):
-        raise submit.subprocess.TimeoutExpired(args[0], 240, output=(JOB+' known-key').encode(),
+        raise submit.subprocess.TimeoutExpired(args[0], 900, output=(JOB+' known-key').encode(),
             stderr=('Authorization: '+arbitrary+'\nHTTP Request: POST https://host/jobs?key='+arbitrary+
                     ' "HTTP/1.1 500 Internal Server Error"').encode())
     monkeypatch.setattr(submit.subprocess, 'run', run)
@@ -511,3 +511,90 @@ def test_http_metadata_job_path_is_not_submission_receipt(ledger):
     proof.write_text(output)
     assert not submit.remember_receipt(value,value['ambiguous_submissions'][0],output,proof)
     assert 'observed_job_ids' not in value['ambiguous_submissions'][0]
+
+
+def test_distinct_network_creates_run_outside_lock_and_merge_without_lost_updates(ledger, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import fcntl
+    import threading
+    root, value = ledger
+    ready(value)
+    value['ambiguous_submissions'] = [gpu_pending(0)]
+    submit.save(root/'campaign.json',value)
+    monkeypatch.setattr(submit.netrc,'netrc',lambda: SimpleNamespace(
+        authenticators=lambda host: ('api',None,'fake-key')))
+    barrier=threading.Barrier(2)
+    checked=threading.Event()
+    def network(*args,**kwargs):
+        assert kwargs['timeout']==965
+        tree=ast.parse(kwargs['input'])
+        command=ast.literal_eval(next(n.value for n in tree.body if isinstance(n,ast.Assign)
+            and any(isinstance(t,ast.Name) and t.id=='command' for t in n.targets)))
+        worker=int(command[command.index('--args')+1].split()[-1])
+        barrier.wait(timeout=3)
+        # Both calls are now in network transport; neither may retain the ledger lock.
+        if worker==2:
+            with (root/'submission.lock').open('a') as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
+                fcntl.flock(lock, fcntl.LOCK_UN)
+            checked.set()
+        else:
+            assert checked.wait(timeout=3)
+        return SimpleNamespace(returncode=0,stdout=JOB if worker==2 else SECOND,stderr='')
+    monkeypatch.setattr(submit.subprocess,'run',network)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures=[executor.submit(submit.main,['worker','--worker-id',str(worker)]) for worker in (2,3)]
+        for future in futures: future.result(timeout=5)
+    current=json.loads((root/'campaign.json').read_text())
+    assert {row['worker'] for row in current['jobs']}=={2,3}
+    assert current['ambiguous_submissions']==[gpu_pending(0)]
+    assert current['reserved_gpu_slots']==3
+
+
+@pytest.mark.parametrize('late', ['same','none','timeout','different'])
+def test_recovery_before_response_is_idempotent_or_preserves_late_conflict(ledger, monkeypatch, late):
+    root,value=ledger
+    ready(value)
+    value['ambiguous_submissions']=[]
+    submit.save(root/'campaign.json',value)
+    monkeypatch.setattr(submit.netrc,'netrc',lambda:SimpleNamespace(
+        authenticators=lambda host:('api',None,'fake-key')))
+    def network(*args,**kwargs):
+        # Simulate independent recover() adoption while the original SSH is in flight.
+        with submit.locked(root/'submission.lock'):
+            current=json.loads((root/'campaign.json').read_text())
+            pending=current['ambiguous_submissions'].pop()
+            current['jobs'].append({**pending,'job_id':JOB,'adopted_at':submit.now()})
+            current['ambiguous_submissions'].append(gpu_pending(0))
+            submit.save(root/'campaign.json',current)
+        if late=='timeout': raise submit.subprocess.TimeoutExpired('ssh',965)
+        return SimpleNamespace(returncode=0,stdout=JOB if late=='same' else SECOND if late=='different' else '',stderr='')
+    monkeypatch.setattr(submit.subprocess,'run',network)
+    if late=='different':
+        with pytest.raises(RuntimeError,match='Late receipt identity conflicts'):
+            submit.main(['worker','--worker-id','7'])
+    else:
+        submit.main(['worker','--worker-id','7'])
+    current=json.loads((root/'campaign.json').read_text())
+    assert len(current['jobs'])==1 and current['jobs'][0]['job_id']==JOB
+    assert current['ambiguous_submissions']==[gpu_pending(0)]
+    assert current['reserved_gpu_slots']==(3 if late=='different' else 2)
+    row=current['jobs'][0]
+    assert bool(row.get('transport_warning')) is (late in {'none','timeout'})
+    if late=='different':
+        assert row['recovery_conflict'] and set(row['observed_job_ids'])=={JOB,SECOND}
+        monkeypatch.setattr(submit.subprocess,'run',lambda *a,**k:pytest.fail('Conflict permitted another create'))
+        with pytest.raises(RuntimeError,match='allocation conflicts'):
+            submit.main(['worker','--worker-id','2'])
+
+
+def test_received_conflict_blocks_cleanup_before_network(ledger, monkeypatch):
+    root,value=ledger
+    ready(value)
+    value['ambiguous_submissions']=[]
+    value['jobs']=[{**gpu_pending(7),'job_id':JOB,'observed_job_ids':[JOB,SECOND],
+                    'recovery_conflict':{'reason':'two actual IDs'}}]
+    submit.save(root/'campaign.json',value)
+    monkeypatch.setattr(submit.subprocess,'run',lambda *a,**k:pytest.fail('Conflict permitted cleanup'))
+    with pytest.raises(AssertionError,match='Received allocation conflict'):
+        submit.main(['cleanup'])
