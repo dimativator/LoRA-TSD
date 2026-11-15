@@ -131,13 +131,13 @@ def main() -> None:
         remote += "d=subprocess.run(command+['--dry-run'],capture_output=True,text=True,timeout=50)\n"
         remote += "assert d.returncode==0\n"
         remote += "assert json.loads(d.stdout)['logs_dir']=='/home/jovyan/shares/SR006.nfs3/mlsub-logs'\n"
-        remote += "r=subprocess.run(command,capture_output=True,text=True,timeout=90)\n"
+        remote += "r=subprocess.run(command,capture_output=True,text=True,timeout=240)\n"
         remote += "out=r.stdout+r.stderr\n"
         remote += "for secret in " + repr(secrets) + ":out=out.replace(secret,'<redacted>')\n"
         remote += "print(out)\nraise SystemExit(r.returncode)\n"
         try:
             result = subprocess.run(SSH + ["python3", "-"], input=remote,
-                                    capture_output=True, text=True, timeout=155)
+                                    capture_output=True, text=True, timeout=305)
         except subprocess.TimeoutExpired:
             raise RuntimeError("Submission response lost; adopt exact unique note, never retry blindly") from None
         output = result.stdout + result.stderr
