@@ -42,7 +42,7 @@ def worker_submission(command: list, secrets: list) -> None:
     timed_out = False
     try:
         result = subprocess.run(command[:1] + ["-v"] + command[1:],
-                                capture_output=True, text=True, timeout=240)
+                                capture_output=True, text=True, timeout=900)
         stdout, stderr, code = result.stdout, result.stderr, result.returncode
     except subprocess.TimeoutExpired as error:
         stdout, stderr, code = error.output or "", error.stderr or "", 124
@@ -89,7 +89,8 @@ def reserved_gpu_slots(campaign: dict) -> int:
     ids = [row["job_id"] for row in campaign["jobs"]]
     assert len(ids) == len(set(ids)), "Duplicate received GPU job ID"
     assert len(records) <= len(TASKS), "Received jobs and unknown GPU intents exceed the eight tasks"
-    return len(campaign["jobs"]) + sum(max(1, len(set(row.get("observed_job_ids", []))))
+    return sum(max(1, len(set(row.get("observed_job_ids", [])) | {row["job_id"]}))
+        for row in campaign["jobs"]) + sum(max(1, len(set(row.get("observed_job_ids", []))))
         for row in pending if gpu_intent(row))
 
 
@@ -111,6 +112,53 @@ def remember_receipt(campaign: dict, pending: dict, output: str, proof: Path, pa
     campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
     save(ARTIFACTS / "campaign.json", campaign)
     return ids
+
+
+def merge_submission(note: str, output: str, proof: Path, returncode: int | None,
+                     partial: bool = False) -> dict:
+    """Merge into fresh state; a concurrent scheduler adoption is authoritative."""
+    with locked(ARTIFACTS / "submission.lock"):
+        campaign = json.loads((ARTIFACTS / "campaign.json").read_text())
+        received = [row for row in campaign["jobs"] + campaign["auxiliary_jobs"] if row["note"] == note]
+        if received:
+            assert len(received) == 1, "Submission note has multiple received records"
+            record = received[0]
+            ids = set(re.findall(r"lm-mpi-job-[a-f0-9-]+", receipt_output(output)))
+            observed = ids | set(record.get("observed_job_ids", [])) | {record["job_id"]}
+            known = {job for row in campaign["jobs"] + campaign["auxiliary_jobs"] if row is not record
+                     for job in set(row.get("observed_job_ids", [])) | {row["job_id"]}}
+            known.update(job for row in campaign.get("ambiguous_submissions", [])
+                         for job in row.get("observed_job_ids", []))
+            record["observed_job_ids"] = sorted(observed)
+            record["transport_evidence"] = {"observed_at": now(), "returncode": returncode,
+                "partial": partial, "evidence": str(proof), "evidence_sha256": digest(proof)}
+            if len(observed) > 1 or ids & known:
+                record["recovery_conflict"] = {"reason": "Late submission receipt conflicts with adopted job",
+                    "observed_at": now(), "evidence": str(proof), "evidence_sha256": digest(proof)}
+            elif partial or not ids:
+                record["transport_warning"] = "Incomplete response after independent scheduler adoption"
+            campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
+            save(ARTIFACTS / "campaign.json", campaign)
+            if record.get("recovery_conflict"):
+                raise RuntimeError("Late receipt identity conflicts with adopted job; preserve conflict")
+            return record
+        matches = [(key, row) for key in ("ambiguous_submissions", "unresolved_auxiliary_submissions")
+                   for row in campaign.get(key, []) if row["note"] == note]
+        assert len(matches) == 1, "Submission intent disappeared or duplicated during transport"
+        key, pending = matches[0]
+        ids = remember_receipt(campaign, pending, output, proof, partial=partial)
+        if partial:
+            raise RuntimeError("Submission response lost; adopt exact unique note, never retry blindly")
+        if len(ids) != 1:
+            raise RuntimeError("No unique submission ID; recover exact note from scheduler")
+        if pending.get("recovery_conflict"):
+            raise RuntimeError("Receipt identity conflicts with an existing job; preserve pending intent")
+        record = {**pending, "job_id": ids.pop(), "transport_returncode": returncode, "submitted_at": now()}
+        campaign[key] = [row for row in campaign[key] if row["note"] != note]
+        campaign["jobs" if pending["mode"] == "worker" else "auxiliary_jobs"].append(record)
+        campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
+        save(ARTIFACTS / "campaign.json", campaign)
+        return record
 
 
 def defer_inspection(campaign: dict) -> None:
@@ -194,11 +242,11 @@ def recover(auxiliary: bool = False) -> None:
             raise RuntimeError(unresolved[0]["error"])
 
 
-def main() -> None:
+def main(argv: list | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["preflight", "prepare", "worker", "inspect", "cleanup", "reconcile", "recover", "recover-auxiliary", "refresh-inspection"])
     parser.add_argument("--worker-id", type=int, choices=range(len(TASKS)))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.mode in {"recover", "recover-auxiliary"}:
         recover(args.mode == "recover-auxiliary")
         return
@@ -218,7 +266,7 @@ def main() -> None:
         if pending and (args.mode not in {"worker", "inspect"} or any(not gpu_intent(row) for row in pending)):
             raise RuntimeError("Resolve CPU or state-changing pending submission before another create intent")
         if args.mode == "worker":
-            if any(row.get("recovery_conflict") for row in pending):
+            if any(row.get("recovery_conflict") for row in pending + campaign["jobs"] + campaign["auxiliary_jobs"]):
                 raise RuntimeError("Resolve observed pending allocation conflicts before another GPU create intent")
             assert campaign.get("review_passed") and campaign.get("assets_ready_verified")
             assert campaign.get("runtime_bundle_sha256")
@@ -247,6 +295,7 @@ def main() -> None:
         if args.mode == "worker":
             environment["PAPER8B_REPAIR_BUNDLE_SHA256"] = campaign["runtime_bundle_sha256"]
         if args.mode in {"cleanup", "reconcile"}:
+            assert not any(row.get("recovery_conflict") for row in campaign["jobs"] + campaign["auxiliary_jobs"]), "Received allocation conflict remains"
             assert not campaign.get("unresolved_auxiliary_submissions"), "Deferred CPU inspection must be audited before cleanup"
             confirmation = json.loads((ARTIFACTS / "cleanup-authorization.json").read_text())
             assert confirmation["verified_runs"] == len(TASKS)
@@ -269,53 +318,37 @@ def main() -> None:
         campaign.setdefault("ambiguous_submissions", []).append(pending)
         campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
         save(ARTIFACTS / "campaign.json", campaign)
-        remote = "import subprocess,json\ncommand=" + repr(command) + "\n"
-        remote += "d=subprocess.run(command+['--dry-run'],capture_output=True,text=True,timeout=50)\n"
-        remote += "assert d.returncode==0\n"
-        remote += "assert json.loads(d.stdout)['logs_dir']=='/home/jovyan/shares/SR006.nfs3/mlsub-logs'\n"
-        if args.mode == "worker":
-            remote += "import re\nfrom urllib.parse import urlsplit\n"
-            remote += inspect.getsource(safe_http_events) + "\n" + inspect.getsource(worker_submission)
-            remote += "\nworker_submission(command," + repr(secrets) + ")\n"
-        else:
-            remote += "r=subprocess.run(command,capture_output=True,text=True,timeout=240)\n"
-            remote += "out=r.stdout+r.stderr\n"
-            remote += "for secret in " + repr(secrets) + ":out=out.replace(secret,'<redacted>')\n"
-            remote += "print(out)\nraise SystemExit(r.returncode)\n"
-        try:
-            result = subprocess.run(SSH + ["python3", "-"], input=remote,
-                                    capture_output=True, text=True, timeout=305)
-        except subprocess.TimeoutExpired as error:
-            output = "".join(value.decode(errors="replace") if isinstance(value, bytes) else (value or "")
-                             for value in (error.output, error.stderr))
-            for secret in secrets:
-                output = output.replace(secret, "<redacted>")
-            proof = ARTIFACTS / ("submission-" + intent + ".log")
-            proof.write_text(output)
-            remember_receipt(campaign, pending, output, proof, partial=True)
-            raise RuntimeError("Submission response lost; adopt exact unique note, never retry blindly") from None
+    remote = "import subprocess,json\ncommand=" + repr(command) + "\n"
+    remote += "d=subprocess.run(command+['--dry-run'],capture_output=True,text=True,timeout=50)\n"
+    remote += "assert d.returncode==0\n"
+    remote += "assert json.loads(d.stdout)['logs_dir']=='/home/jovyan/shares/SR006.nfs3/mlsub-logs'\n"
+    if args.mode == "worker":
+        remote += "import re\nfrom urllib.parse import urlsplit\n"
+        remote += inspect.getsource(safe_http_events) + "\n" + inspect.getsource(worker_submission)
+        remote += "\nworker_submission(command," + repr(secrets) + ")\n"
+    else:
+        remote += "r=subprocess.run(command,capture_output=True,text=True,timeout=900)\n"
+        remote += "out=r.stdout+r.stderr\n"
+        remote += "for secret in " + repr(secrets) + ":out=out.replace(secret,'<redacted>')\n"
+        remote += "print(out)\nraise SystemExit(r.returncode)\n"
+    transport_partial = False
+    try:
+        result = subprocess.run(SSH + ["python3", "-"], input=remote,
+                                capture_output=True, text=True, timeout=965)
         output = result.stdout + result.stderr
-        for secret in secrets:
-            output = output.replace(secret, "<redacted>")
-        proof = ARTIFACTS / ("submission-" + intent + ".log")
-        proof.write_text(output)
-        create_timed_out = args.mode == "worker" and result.returncode == 124
-        ids = remember_receipt(campaign, pending, output, proof, partial=create_timed_out)
-        if create_timed_out:
-            raise RuntimeError("Submission response lost; adopt exact unique note, never retry blindly")
-        if len(ids) != 1:
-            raise RuntimeError("No unique submission ID; recover exact note from scheduler")
-        job_id = ids.pop()
-        if pending.get("recovery_conflict"):
-            raise RuntimeError("Receipt identity conflicts with an existing job; preserve pending intent")
-        record = {**pending, "job_id": job_id, "transport_returncode": result.returncode,
-                  "submitted_at": now()}
-        campaign["ambiguous_submissions"] = [row for row in campaign["ambiguous_submissions"] if row["note"] != note]
-        collection = "jobs" if args.mode == "worker" else "auxiliary_jobs"
-        campaign[collection].append(record)
-        campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
-        save(ARTIFACTS / "campaign.json", campaign)
-        print(json.dumps(record, indent=2))
+        returncode = result.returncode
+        transport_partial = args.mode == "worker" and returncode == 124
+    except subprocess.TimeoutExpired as error:
+        output = "".join(value.decode(errors="replace") if isinstance(value, bytes) else (value or "")
+                         for value in (error.output, error.stderr))
+        returncode = None
+        transport_partial = True
+    for secret in secrets:
+        output = output.replace(secret, "<redacted>")
+    proof = ARTIFACTS / ("submission-" + intent + ".log")
+    proof.write_text(output)
+    record = merge_submission(note, output, proof, returncode, transport_partial)
+    print(json.dumps(record, indent=2))
 
 
 if __name__ == "__main__":
