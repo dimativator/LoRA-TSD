@@ -166,3 +166,30 @@ def test_temp_wandb_paths_restore_environment_and_stay_owned(tmp_path, monkeypat
         assert Path(os.environ["WANDB_DATA_DIR"]).parent == tmp_path
     import os
     assert os.environ["WANDB_DIR"] == "before"
+
+
+def test_upload_child_sdk_summary_api_uses_mapping_and_flat_temp_files(fallback, monkeypatch):
+    import tempfile
+    class Summary(dict):
+        def update(self, mapping):
+            super().update(mapping)
+    summary, uploaded, finished = Summary(), [], []
+    run = SimpleNamespace(summary=summary,
+        save=lambda path, base_path, policy: uploaded.append((Path(path).name, Path(base_path), policy)),
+        finish=lambda exit_code: finished.append(exit_code))
+    fake = SimpleNamespace(init=lambda **kwargs: run, Settings=lambda **kwargs: None)
+    monkeypatch.setitem(sys.modules, "wandb", fake)
+    monkeypatch.setenv("REPAIR_CONTROL_NOTE", fallback.auxiliary["note"])
+    monkeypatch.setenv("WANDB_BASE_URL", "https://wandb-radfan.ru")
+    monkeypatch.setenv("WANDB_API_KEY", "not-real")
+    checksum = fallback.artifacts / "bundle.sha256"
+    checksum.write_text("a" * 64)
+    monkeypatch.setattr(control, "BUNDLE_SHA", checksum)
+    monkeypatch.setattr(control, "require_space", lambda *args: [])
+    with tempfile.TemporaryDirectory(prefix="repair-control-test-", dir="/tmp") as temporary:
+        source = Path(temporary) / "source.json"
+        source.write_text(json.dumps(fallback.snapshot))
+        control.upload_child(source)
+        assert {name for name, directory, policy in uploaded} == {"snapshot.json.gz", "snapshot-manifest.json"}
+        assert all(directory == source.parent and policy == "now" for name, directory, policy in uploaded)
+    assert finished == [0] and summary["snapshot_verified"] is True

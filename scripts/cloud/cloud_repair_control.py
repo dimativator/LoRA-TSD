@@ -79,7 +79,7 @@ def upload_child(snapshot_path: Path) -> None:
     require(os.environ.get("WANDB_BASE_URL") == "https://wandb-radfan.ru"
             and bool(os.environ.get("WANDB_API_KEY")), "Owned control upload credentials/host are unavailable")
     require(not snapshot_path.is_symlink() and snapshot_path.is_file()
-            and snapshot_path.resolve().is_relative_to(Path("/tmp")), "Control upload source is not an owned temporary file")
+            and snapshot_path.resolve().is_relative_to(Path("/tmp").resolve()), "Control upload source is not an owned temporary file")
     require(snapshot_path.stat().st_size <= MAX_BYTES, "Control source is oversized")
     snapshot = json.loads(snapshot_path.read_text())
     data = snapshot_bytes(snapshot)
@@ -106,9 +106,9 @@ def upload_child(snapshot_path: Path) -> None:
         try:
             run.save(str(payload), base_path=str(directory), policy="now")
             run.save(str(manifest_path), base_path=str(directory), policy="now")
-            run.summary.update(snapshot_verified=True, snapshot_sha256=manifest["sha256"],
-                               snapshot_manifest_sha256=hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
-                               checkpoint_count=0, returncode=0)
+            run.summary.update({"snapshot_verified": True, "snapshot_sha256": manifest["sha256"],
+                                "snapshot_manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                                "checkpoint_count": 0, "returncode": 0})
         except BaseException:
             run.finish(exit_code=1)
             raise
