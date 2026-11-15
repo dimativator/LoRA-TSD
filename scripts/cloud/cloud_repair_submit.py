@@ -3,11 +3,13 @@
 import argparse
 from datetime import datetime, timezone
 import json
+import inspect
 import netrc
 from pathlib import Path
 import re
 import subprocess
 import time
+from urllib.parse import urlsplit
 
 from cloud_repair_common import CAMPAIGN, TASKS, digest, locked, now, save
 from cloud14_core import encode_audit_environment
@@ -17,6 +19,50 @@ ARTIFACTS = Path(__file__).resolve().parents[4] / "artifacts/paper_8b_pro_rite_r
 SSH = ["ssh", "-o", "ClearAllForwardings=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=25",
        "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ServerAliveInterval=10",
        "-o", "ServerAliveCountMax=2", "brain_lab"]
+
+
+def safe_http_events(stderr: str) -> list:
+    """Allow only structured HTTP request lines; discard headers, bodies and queries."""
+    events = []
+    pattern = re.compile(r'\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(https?://[^\s"\']+|/[^\s"\']*)\s+["\']?HTTP/\d(?:\.\d)?["\']?\s+([1-5]\d{2})\b')
+    for line in stderr.splitlines():
+        for match in pattern.finditer(line):
+            method, target, status = match.groups()
+            try:
+                path = urlsplit(target).path
+            except ValueError:
+                continue
+            if re.fullmatch(r"/[A-Za-z0-9_./%~:@+\-=]*", path):
+                events.append({"method": method, "path": path, "status": int(status)})
+    return events
+
+
+def worker_submission(command: list, secrets: list) -> None:
+    """Verbose stderr never leaves the gateway; only allowlisted HTTP events do."""
+    timed_out = False
+    try:
+        result = subprocess.run(command[:1] + ["-v"] + command[1:],
+                                capture_output=True, text=True, timeout=240)
+        stdout, stderr, code = result.stdout, result.stderr, result.returncode
+    except subprocess.TimeoutExpired as error:
+        stdout, stderr, code = error.output or "", error.stderr or "", 124
+        timed_out = True
+    if isinstance(stdout, bytes):
+        stdout = stdout.decode(errors="replace")
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode(errors="replace")
+    for secret in secrets:
+        stdout = stdout.replace(secret, "<redacted>")
+        stderr = stderr.replace(secret, "<redacted>")
+    print(stdout)
+    print("REPAIR_HTTP_DIAGNOSTICS " + json.dumps({"http_events": safe_http_events(stderr),
+          "timed_out": timed_out, "returncode": code}, sort_keys=True))
+    raise SystemExit(code)
+
+
+def receipt_output(output: str) -> str:
+    return "\n".join(line for line in output.splitlines()
+                     if not line.startswith("REPAIR_HTTP_DIAGNOSTICS "))
 
 
 def cpu_inspection(record: dict) -> bool:
@@ -48,7 +94,7 @@ def reserved_gpu_slots(campaign: dict) -> int:
 
 
 def remember_receipt(campaign: dict, pending: dict, output: str, proof: Path, partial: bool = False) -> set:
-    ids = set(re.findall(r"lm-mpi-job-[a-f0-9-]+", output))
+    ids = set(re.findall(r"lm-mpi-job-[a-f0-9-]+", receipt_output(output)))
     if ids:
         observed = ids | set(pending.get("observed_job_ids", []))
         pending["observed_job_ids"] = sorted(observed)
@@ -227,10 +273,15 @@ def main() -> None:
         remote += "d=subprocess.run(command+['--dry-run'],capture_output=True,text=True,timeout=50)\n"
         remote += "assert d.returncode==0\n"
         remote += "assert json.loads(d.stdout)['logs_dir']=='/home/jovyan/shares/SR006.nfs3/mlsub-logs'\n"
-        remote += "r=subprocess.run(command,capture_output=True,text=True,timeout=240)\n"
-        remote += "out=r.stdout+r.stderr\n"
-        remote += "for secret in " + repr(secrets) + ":out=out.replace(secret,'<redacted>')\n"
-        remote += "print(out)\nraise SystemExit(r.returncode)\n"
+        if args.mode == "worker":
+            remote += "import re\nfrom urllib.parse import urlsplit\n"
+            remote += inspect.getsource(safe_http_events) + "\n" + inspect.getsource(worker_submission)
+            remote += "\nworker_submission(command," + repr(secrets) + ")\n"
+        else:
+            remote += "r=subprocess.run(command,capture_output=True,text=True,timeout=240)\n"
+            remote += "out=r.stdout+r.stderr\n"
+            remote += "for secret in " + repr(secrets) + ":out=out.replace(secret,'<redacted>')\n"
+            remote += "print(out)\nraise SystemExit(r.returncode)\n"
         try:
             result = subprocess.run(SSH + ["python3", "-"], input=remote,
                                     capture_output=True, text=True, timeout=305)
@@ -248,7 +299,10 @@ def main() -> None:
             output = output.replace(secret, "<redacted>")
         proof = ARTIFACTS / ("submission-" + intent + ".log")
         proof.write_text(output)
-        ids = remember_receipt(campaign, pending, output, proof)
+        create_timed_out = args.mode == "worker" and result.returncode == 124
+        ids = remember_receipt(campaign, pending, output, proof, partial=create_timed_out)
+        if create_timed_out:
+            raise RuntimeError("Submission response lost; adopt exact unique note, never retry blindly")
         if len(ids) != 1:
             raise RuntimeError("No unique submission ID; recover exact note from scheduler")
         job_id = ids.pop()

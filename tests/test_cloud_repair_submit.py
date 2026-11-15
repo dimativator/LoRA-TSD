@@ -440,3 +440,74 @@ def test_partial_timeout_ids_are_recorded_and_redacted_without_adoption(ledger, 
     assert current["reserved_gpu_slots"] == (2 if multiple else 1)
     assert bool(pending.get("recovery_conflict")) is multiple
     assert "test-key-not-real" not in (root / "submission-worker-0.log").read_text()
+
+
+def test_worker_verbose_only_changes_logger_flag_and_discards_all_raw_stderr(monkeypatch, capsys):
+    command = ['mlsub', 'run', '--gpus', '1', '--env', 'WANDB_API_KEY=known-secret']
+    calls = []
+    arbitrary = 'arbitrary-admin-credential-not-in-secrets'
+    def run(actual, **kwargs):
+        calls.append(actual)
+        assert kwargs == dict(capture_output=True, text=True, timeout=240)
+        return SimpleNamespace(returncode=0, stdout=JOB + ' known-secret', stderr=(
+            'Authorization: Bearer ' + arbitrary + '\n'
+            'HTTP Request: POST https://api.example/jobs?token=' + arbitrary + ' "HTTP/1.1 503 Service Unavailable"\n'
+            'https://api.example:443 "GET /jobs/list?key=' + arbitrary + ' HTTP/1.1" 200 12\n'
+            'secret payload ' + arbitrary))
+    monkeypatch.setattr(submit.subprocess, 'run', run)
+    with pytest.raises(SystemExit) as error:
+        submit.worker_submission(command, ['known-secret'])
+    assert error.value.code == 0
+    assert calls == [['mlsub', '-v'] + command[1:]]
+    assert command == ['mlsub', 'run', '--gpus', '1', '--env', 'WANDB_API_KEY=known-secret']
+    output = capsys.readouterr().out
+    assert arbitrary not in output and 'known-secret' not in output
+    metadata = json.loads(output.split('REPAIR_HTTP_DIAGNOSTICS ')[1])
+    assert metadata == {'http_events': [{'method':'POST','path':'/jobs','status':503},
+        {'method':'GET','path':'/jobs/list','status':200}], 'timed_out':False, 'returncode':0}
+    assert submit.receipt_output(output).strip() == JOB + ' <redacted>'
+
+
+def test_remote_worker_timeout_preserves_only_sanitized_metadata_and_partial_stdout(monkeypatch, capsys):
+    arbitrary = 'unknown-admin-secret'
+    def run(*args, **kwargs):
+        raise submit.subprocess.TimeoutExpired(args[0], 240, output=(JOB+' known-key').encode(),
+            stderr=('Authorization: '+arbitrary+'\nHTTP Request: POST https://host/jobs?key='+arbitrary+
+                    ' "HTTP/1.1 500 Internal Server Error"').encode())
+    monkeypatch.setattr(submit.subprocess, 'run', run)
+    with pytest.raises(SystemExit) as error:
+        submit.worker_submission(['mlsub','run'], ['known-key'])
+    assert error.value.code == 124
+    output = capsys.readouterr().out
+    assert arbitrary not in output and 'known-key' not in output
+    metadata = json.loads(output.split('REPAIR_HTTP_DIAGNOSTICS ')[1])
+    assert metadata == {'http_events':[{'method':'POST','path':'/jobs','status':500}],
+        'timed_out':True,'returncode':124}
+    assert submit.receipt_output(output).strip() == JOB+' <redacted>'
+
+
+def test_remote_timeout_never_mints_receipt_even_with_partial_job_id(ledger, monkeypatch):
+    root, value = ledger
+    ready(value)
+    value['ambiguous_submissions'] = []
+    submit.save(root/'campaign.json',value)
+    mock_create(monkeypatch, root, 'worker',7)
+    output = JOB+'\nREPAIR_HTTP_DIAGNOSTICS '+json.dumps({'http_events':[], 'timed_out':True, 'returncode':124})
+    monkeypatch.setattr(submit.subprocess,'run',lambda *a,**k: SimpleNamespace(returncode=124,stdout=output,stderr=''))
+    with pytest.raises(RuntimeError,match='response lost'):
+        submit.main()
+    current=json.loads((root/'campaign.json').read_text())
+    assert not current['jobs']
+    assert current['ambiguous_submissions'][0]['partial_receipt']
+    assert current['ambiguous_submissions'][0]['observed_job_ids']==[JOB]
+
+
+def test_http_metadata_job_path_is_not_submission_receipt(ledger):
+    root,value=ledger
+    ready(value)
+    value['ambiguous_submissions']=[gpu_pending(7)]
+    proof=root/'diagnostics.log'
+    output='REPAIR_HTTP_DIAGNOSTICS '+json.dumps({'http_events':[{'method':'GET','path':'/jobs/'+JOB,'status':200}]})
+    proof.write_text(output)
+    assert not submit.remember_receipt(value,value['ambiguous_submissions'][0],output,proof)
+    assert 'observed_job_ids' not in value['ambiguous_submissions'][0]
