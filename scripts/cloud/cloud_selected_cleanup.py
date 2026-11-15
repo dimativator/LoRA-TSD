@@ -19,6 +19,35 @@ PATHS = [Path("/"), Path("/tmp"), Path("/home/jovyan"), STATE]
 ACTIVE_GRID = Path("/home/jovyan/shares/SR006.nfs3/dimativator-polar-grid-124m-20261114-b16")
 
 
+def walk_fd(root: Path):
+    """Keep OS operations relative to open directories, including paths beyond PATH_MAX."""
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    device = os.fstat(root_fd).st_dev
+
+    def descend(fd: int, parts: tuple[str, ...]):
+        with os.scandir(fd) as iterator:
+            names = sorted(entry.name for entry in iterator)
+        for name in names:
+            info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            if info.st_dev != device:
+                raise ValueError("Nested filesystem within selected directory")
+            relative = "/".join((*parts, name))
+            yield relative, info, fd, name
+            if stat.S_ISDIR(info.st_mode):
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                try:
+                    current = os.fstat(child)
+                    if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                        raise ValueError("Directory identity changed during inventory")
+                    yield from descend(child, (*parts, name))
+                finally:
+                    os.close(child)
+    try:
+        yield from descend(root_fd, ())
+    finally:
+        os.close(root_fd)
+
+
 def verify_active_grid() -> list[dict]:
     def check_references(value: object) -> None:
         if isinstance(value, dict):
@@ -79,28 +108,20 @@ def scan(root: Path, max_mtime_ns: int | None = None) -> dict:
     rows = []
     last_space_check = time.monotonic()
 
-    def failed(error: OSError) -> None:
-        raise error
-
-    for directory, directories, files in os.walk(root, followlinks=False, onerror=failed):
-        for name in sorted(directories + files):
-            path = Path(directory) / name
-            info = path.lstat()
-            if info.st_dev != identity.st_dev:
-                raise ValueError("Nested filesystem within selected directory")
-            if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)
-                    or stat.S_ISLNK(info.st_mode)):
-                raise ValueError("Special file within selected directory")
-            if max_mtime_ns is not None and info.st_mtime_ns > max_mtime_ns:
-                raise ValueError("Selected directory changed after the user-reviewed inventory")
-            rows.append({"path": str(path.relative_to(root)), "mode": info.st_mode,
-                         "inode": info.st_ino, "size": info.st_size,
-                         "allocated": info.st_blocks * 512, "mtime_ns": info.st_mtime_ns})
-            if len(rows) > 100000:
-                raise ValueError("Selected directory unexpectedly large")
-            if time.monotonic() - last_space_check > 30:
-                require_space(PATHS)
-                last_space_check = time.monotonic()
+    for relative, info, _, _ in walk_fd(root):
+        if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)
+                or stat.S_ISLNK(info.st_mode)):
+            raise ValueError("Special file within selected directory")
+        if max_mtime_ns is not None and info.st_mtime_ns > max_mtime_ns:
+            raise ValueError("Selected directory changed after the user-reviewed inventory")
+        rows.append({"path": relative, "mode": info.st_mode,
+                     "inode": info.st_ino, "size": info.st_size,
+                     "allocated": info.st_blocks * 512, "mtime_ns": info.st_mtime_ns})
+        if len(rows) > 100000:
+            raise ValueError("Selected directory unexpectedly large")
+        if time.monotonic() - last_space_check > 30:
+            require_space(PATHS)
+            last_space_check = time.monotonic()
     unique_allocations = {row["inode"]: row["allocated"] for row in rows}
     return {"path": str(root), "device": identity.st_dev, "inode": identity.st_ino,
             "entries": len(rows), "allocated_bytes": identity.st_blocks * 512
@@ -117,21 +138,28 @@ def verify_archive(audit: dict) -> None:
     expected = {row["path"]: row for row in manifest["files"]}
     actual = set()
     last_check = time.monotonic()
-    for directory, directories, files in os.walk(ARCHIVE, followlinks=False):
-        if any((Path(directory) / name).is_symlink() for name in directories):
+    for relative, info, parent_fd, name in walk_fd(ARCHIVE):
+        if stat.S_ISLNK(info.st_mode):
             raise ValueError("Unexpected archive link")
-        for name in files:
-            path = Path(directory) / name
-            relative = str(path.relative_to(ARCHIVE))
-            if path.is_symlink() or relative not in expected:
-                raise ValueError("Unexpected archive file")
-            row = expected[relative]
-            if path.stat().st_size != row["bytes"] or digest(path) != row["sha256"]:
+        if stat.S_ISDIR(info.st_mode):
+            continue
+        if not stat.S_ISREG(info.st_mode) or relative not in expected:
+            raise ValueError("Unexpected archive file")
+        row = expected[relative]
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+        with os.fdopen(fd, "rb") as stream:
+            current = os.fstat(stream.fileno())
+            if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                raise ValueError("Archive file identity changed")
+            hashed = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+                hashed.update(chunk)
+            if current.st_size != row["bytes"] or hashed.hexdigest() != row["sha256"]:
                 raise ValueError("Archive file differs from independently verified backup")
-            actual.add(relative)
-            if time.monotonic() - last_check > 30:
-                require_space(PATHS)
-                last_check = time.monotonic()
+        actual.add(relative)
+        if time.monotonic() - last_check > 30:
+            require_space(PATHS)
+            last_check = time.monotonic()
     if actual != set(expected):
         raise ValueError("Archive inventory differs from verified manifest")
 
