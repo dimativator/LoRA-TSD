@@ -100,19 +100,64 @@ def task_key(task: dict) -> str:
     return f"{task['method']}_{task['dataset']}_seed{task['seed']}"
 
 
+AUDIT_ENV_CHUNK_BYTES = 200
+AUDIT_ENV_MAX_CHUNKS = 256
+AUDIT_ENV_MAX_ENCODED_BYTES = AUDIT_ENV_CHUNK_BYTES * AUDIT_ENV_MAX_CHUNKS
+
+
 def encode_audit_environment(prefix: str, audit: dict) -> dict[str, str]:
-    """Cloud's gateway accepts at most255safecharacters per environment value."""
-    value = base64.urlsafe_b64encode(json.dumps(audit).encode()).decode()
-    chunks = [value[index:index + 200] for index in range(0, len(value), 200)]
+    """Bounded audit transport, retaining gateway-safe values below255characters."""
+    if not isinstance(audit, dict):
+        raise ValueError("Audit environment payload must be an object")
+    value = base64.urlsafe_b64encode(json.dumps(audit, allow_nan=False).encode()).decode()
+    if len(value) > AUDIT_ENV_MAX_ENCODED_BYTES:
+        raise ValueError("Audit environment payload exceeds bounded transport capacity")
+    chunks = [value[index:index + AUDIT_ENV_CHUNK_BYTES]
+              for index in range(0, len(value), AUDIT_ENV_CHUNK_BYTES)]
     return {prefix + "_COUNT": str(len(chunks)),
             **{prefix + "_" + str(index): chunk for index, chunk in enumerate(chunks)}}
 
 
 def decode_audit_environment(prefix: str) -> dict:
-    count = int(os.environ[prefix + "_COUNT"])
-    assert count in range(1, 33)
-    value = "".join(os.environ[prefix + "_" + str(index)] for index in range(count))
-    return json.loads(base64.urlsafe_b64decode(value))
+    count_text = os.environ[prefix + "_COUNT"]
+    if not re.fullmatch(r"[1-9][0-9]{0,2}", count_text):
+        raise ValueError("Invalid audit environment chunk count")
+    count = int(count_text)
+    if not 1 <= count <= AUDIT_ENV_MAX_CHUNKS:
+        raise ValueError("Audit environment chunk count exceeds bounded transport capacity")
+    chunks = [os.environ[prefix + "_" + str(index)] for index in range(count)]
+    if any(not chunk or len(chunk) > AUDIT_ENV_CHUNK_BYTES for chunk in chunks):
+        raise ValueError("Invalid audit environment chunk size")
+    value = "".join(chunks)
+    if (len(value) > AUDIT_ENV_MAX_ENCODED_BYTES
+            or not re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", value)):
+        raise ValueError("Invalid bounded audit environment encoding")
+    data = base64.b64decode(value, altchars=b"-_", validate=True)
+    if base64.urlsafe_b64encode(data).decode() != value:
+        raise ValueError("Noncanonical audit environment encoding")
+
+    def object_pairs(pairs):
+        result = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError("Duplicate audit JSON object key")
+            result[key] = item
+        return result
+
+    def invalid_constant(_):
+        raise ValueError("Nonfinite audit JSON number")
+
+    def finite_float(text):
+        number = float(text)
+        if not math.isfinite(number):
+            raise ValueError("Nonfinite audit JSON number")
+        return number
+
+    result = json.loads(data.decode("utf-8"), object_pairs_hook=object_pairs,
+                        parse_constant=invalid_constant, parse_float=finite_float)
+    if not isinstance(result, dict):
+        raise ValueError("Audit environment payload must be an object")
+    return result
 
 
 def snapshot_lines(payload: dict) -> list[str]:
