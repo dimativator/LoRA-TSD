@@ -37,6 +37,10 @@ def inspect(preflight: bool = False) -> None:
     else:
         result["tasks"] = [json.loads(path.read_text()) for path in sorted((STATE / "tasks").glob("*.json"))]
         result["workers"] = [json.loads(path.read_text()) for path in sorted((STATE / "workers").glob("*.json"))]
+        from cloud_repair_guard_inspect import inspect_guard
+        result["owned_guards_timestamp"] = now()
+        result["owned_guards"] = [inspect_guard(status, result["owned_guards_timestamp"])
+                                  for status in result["tasks"]]
         result["pending_spools"] = [str(path) for path in sorted((STATE / "pending-wandb-sync").glob("*"))]
         preparation = STATE / "preparation.json"
         result["preparation"] = json.loads(preparation.read_text()) if preparation.exists() else None
