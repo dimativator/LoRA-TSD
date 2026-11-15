@@ -4,10 +4,12 @@ import copy
 from datetime import datetime, timedelta, timezone
 import gzip
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+from types import ModuleType
 
 import pytest
 
@@ -193,3 +195,13 @@ def test_upload_child_sdk_summary_api_uses_mapping_and_flat_temp_files(fallback,
         assert {name for name, directory, policy in uploaded} == {"snapshot.json.gz", "snapshot-manifest.json"}
         assert all(directory == source.parent and policy == "now" for name, directory, policy in uploaded)
     assert finished == [0] and summary["snapshot_verified"] is True
+
+
+def test_remote_upload_module_import_does_not_need_local_monitor_hardening(monkeypatch):
+    monkeypatch.setitem(sys.modules, "cloud_repair_monitor", ModuleType("cloud_repair_monitor"))
+    monkeypatch.setitem(sys.modules, "cloud14_monitor", ModuleType("cloud14_monitor"))
+    specification = importlib.util.spec_from_file_location("isolated_remote_control", Path(control.__file__))
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    assert callable(module.upload_snapshot) and callable(module.upload_child)
+    assert module.SHA256.fullmatch("a" * 64)

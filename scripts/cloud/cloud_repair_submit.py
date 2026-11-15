@@ -1,13 +1,15 @@
 """Submit journaled repair jobs through the existing gateway, without exposing secrets."""
 
 import argparse
+from datetime import datetime, timezone
 import json
 import netrc
 from pathlib import Path
 import re
 import subprocess
+import time
 
-from cloud_repair_common import CAMPAIGN, TASKS, locked, now, save
+from cloud_repair_common import CAMPAIGN, TASKS, digest, locked, now, save
 from cloud14_core import encode_audit_environment
 
 
@@ -26,28 +28,36 @@ def recover() -> None:
             return
         assert len(pending) == 1
         intent = pending[0]
-        remote = "import subprocess,os,signal,json\n"
-        remote += "p=subprocess.Popen(['mlsub','list'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)\n"
-        remote += "try:\n out,err=p.communicate(timeout=30)\n print(json.dumps({'returncode':p.returncode,'stdout':out}))\n"
-        remote += "except subprocess.TimeoutExpired:\n os.killpg(p.pid,signal.SIGKILL)\n print(json.dumps({'timeout':True}))\n"
-        response = subprocess.run(SSH + ["python3", "-"], input=remote,
-                                  capture_output=True, text=True, timeout=55)
-        assert response.returncode == 0
-        payload = json.loads(response.stdout)
-        if payload.get("timeout") or payload.get("returncode") != 0:
-            raise RuntimeError("Scheduler unavailable; keep the pending intent and do not resubmit")
-        text = payload["stdout"]
-        save_path = ARTIFACTS / ("recovery-" + intent["intent"] + ".log")
+        if intent["mode"] == "worker":
+            assert intent["worker"] in range(len(TASKS)) and intent["gpus"] == 1
+            assert len(campaign["jobs"]) < len(TASKS)
+            assert not any(row["worker"] == intent["worker"] for row in campaign["jobs"])
+        else:
+            assert intent["gpus"] == 0
+        from cloud_repair_collect import query_listings, listing_rows
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        prefix = "recovery-" + intent["intent"] + "-" + stamp
+        queries = query_listings(time.monotonic() + 110, ARTIFACTS, prefix)
+        text = "\n".join(f"# query={row['source']} observed_at={row['observed_at']}\n{row['stdout']}" for row in queries)
+        save_path = ARTIFACTS / (prefix + ".log")
         save_path.write_text(text)
-        matches = [line for line in text.splitlines()
-                   if "|note:" in line and line.split("|note:", 1)[1].strip() == intent["note"]]
-        if len(matches) != 1:
+        rows = listing_rows(queries)
+        matches = [row for row in rows if row["note"] == intent["note"]]
+        ids = {row["job_id"] for row in matches}
+        if len(ids) != 1:
             raise RuntimeError("No unique scheduler match yet; keep intent pending")
-        fields = matches[0].split(None, 2)
-        assert re.fullmatch(r"lm-mpi-job-[a-f0-9-]+", fields[0])
-        assert "repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|" in fields[2]
-        record = {**intent, "job_id": fields[0], "scheduler_status": fields[1],
-                  "adopted_at": now(), "unique_note_evidence": str(save_path)}
+        job_id = next(iter(ids))
+        same_id = [row for row in rows if row["job_id"] == job_id]
+        if (any(not row["owned_entry"] or row["note"] != intent["note"] for row in same_id)
+                or len({row["status"].lower() for row in same_id}) != 1):
+            raise RuntimeError("Scheduler identity/status evidence conflicts; keep intent pending")
+        latest = max(matches, key=lambda row: row["observed_at"])
+        record = {**intent, "job_id": job_id, "scheduler_status": latest["status"],
+                  "scheduler_observed_at": latest["observed_at"], "adopted_at": now(),
+                  "unique_note_evidence": str(save_path), "absence_proof": False,
+                  "unique_note_evidence_sha256": digest(save_path),
+                  "listings_complete": all(row["complete"] for row in queries),
+                  "listing_queries": [{key: value for key, value in row.items() if key != "stdout"} for row in queries]}
         collection = "jobs" if intent["mode"] == "worker" else "auxiliary_jobs"
         assert not any(row["job_id"] == record["job_id"] for row in campaign[collection])
         campaign[collection].append(record)

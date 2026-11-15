@@ -160,6 +160,65 @@ def test_scheduler_parses_plaintext_exact_ids_and_retains_history(ledger, monkey
     assert campaign["jobs"][0]["scheduler_status"] == "Completed"
 
 
+@pytest.mark.parametrize("case", ["active_only", "consistent", "conflict", "partial_full"])
+def test_dual_scheduler_reconciles_live_only_jobs_without_absence_claims(ledger, monkeypatch, case):
+    _, value = ledger
+    value["auxiliary_jobs"][0]["note"] = "known-note"
+    collect.save(collect.ARTIFACTS / "campaign.json", value)
+    line = f"{JOB} Pending repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|note:known-note"
+    calls = []
+    def remote(command, *args):
+        calls.append(command)
+        active = command[-1] == "--active"
+        raw = line if active or case == "consistent" else ""
+        if case == "conflict" and not active:
+            raw = line.replace(" Pending ", " Running ")
+        return {"stdout": raw, "returncode": None if case == "partial_full" and not active else 0,
+                "ssh_returncode": 0, "timed_out": case == "partial_full" and not active,
+                "ssh_timed_out": False}
+    monkeypatch.setattr(collect, "remote_cli", remote)
+    result = collect.scheduler(time.monotonic() + 100)
+    assert calls == [["mlsub", "list"], ["mlsub", "list", "--active"]]
+    assert result["absence_proof"] is False
+    assert result["jobs"][0]["status"] == (None if case == "conflict" else "Pending")
+    assert result["listings_complete"] is (case != "partial_full")
+    assert {row["source"] for row in result["queries"]} == {"full", "active"}
+    for row in result["queries"]:
+        assert collect.digest(Path(row["raw_proof"])) == row["raw_proof_sha256"]
+
+
+def test_scheduler_duplicate_note_with_different_ids_fails_closed(ledger, monkeypatch):
+    _, value = ledger
+    value["auxiliary_jobs"][0]["note"] = "duplicated-note"
+    collect.save(collect.ARTIFACTS / "campaign.json", value)
+    line = f"{JOB} Running repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|note:duplicated-note"
+    def remote(command, *args):
+        return {"stdout": line if command[-1] != "--active" else line.replace(JOB, SECOND),
+                "returncode": 0, "ssh_returncode": 0, "timed_out": False, "ssh_timed_out": False}
+    monkeypatch.setattr(collect, "remote_cli", remote)
+    result = collect.scheduler(time.monotonic() + 100)
+    assert result["jobs"][0]["status"] is None
+
+
+@pytest.mark.parametrize("metadata", ["foreign metadata", "", "repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|"])
+def test_scheduler_retains_same_id_missing_note_as_conflicting_identity(ledger, monkeypatch, metadata):
+    good = f"{JOB} Pending repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|note:owned-note"
+    def remote(command, *args):
+        return {"stdout": good if command[-1] == "--active" else f"{JOB} Pending {metadata}",
+                "returncode": 0, "ssh_returncode": 0, "timed_out": False, "ssh_timed_out": False}
+    monkeypatch.setattr(collect, "remote_cli", remote)
+    result = collect.scheduler(time.monotonic() + 100)
+    assert result["jobs"][0]["status"] is None
+
+
+def test_single_note_missing_row_is_not_positive_scheduler_proof(ledger, monkeypatch):
+    bad = f"{JOB} Pending repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|"
+    monkeypatch.setattr(collect, "remote_cli", lambda *a: {
+        "stdout": bad, "returncode": 0, "ssh_returncode": 0,
+        "timed_out": False, "ssh_timed_out": False})
+    assert collect.scheduler(time.monotonic() + 100)["jobs"][0]["status"] is None
+
+
 def test_remote_timeout_wrapper_preserves_complete_partial_output(monkeypatch):
     value = snapshot()
     raw = "\n".join(snapshot_lines(value))

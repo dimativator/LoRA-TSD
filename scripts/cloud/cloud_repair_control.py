@@ -20,11 +20,24 @@ import tempfile
 from cloud_repair_collect import validate_snapshot
 from cloud_repair_common import (BUNDLE_SHA, CAMPAIGN, PYTHON, affected_paths,
                                  locked, now, require_space, save)
-from cloud_repair_monitor import ARTIFACTS, SHA256, fetch, require
+from cloud_repair_submit import ARTIFACTS
 
 
 GROUP = CAMPAIGN + "-control"
 MAX_BYTES = 16_000_000
+SHA256 = re.compile(r"^[a-f0-9]{64}$")
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)
+
+
+def fetch(*args, **kwargs):
+    # The downloader belongs to local collection. CPU upload must not import
+    # local-only monitor hardening absent from the historical remote helper.
+    from cloud_repair_monitor import fetch as implementation
+    return implementation(*args, **kwargs)
 
 
 def snapshot_bytes(snapshot: dict) -> bytes:

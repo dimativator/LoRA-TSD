@@ -146,6 +146,25 @@ def verify_scheduler(campaign: dict, scheduler: dict, inspection: dict, artifact
     proof = Path(scheduler["raw_proof"])
     require(not proof.is_symlink() and proof.resolve().is_relative_to(artifacts.resolve())
             and digest(proof) == scheduler.get("raw_proof_sha256"), "Scheduler raw proof changed")
+    if "queries" in scheduler:
+        queries = scheduler["queries"]
+        require(len(queries) == 2 and {row.get("source") for row in queries} == {"full", "active"}
+                and scheduler.get("listings_complete") is True and scheduler.get("absence_proof") is False,
+                "Composite scheduler query coverage is incomplete")
+        sources = []
+        for query in queries:
+            require(query.get("complete") is True and query.get("cli_returncode") == 0
+                    and query.get("ssh_returncode") == 0 and query.get("timed_out") is False,
+                    "Composite scheduler query transport is incomplete")
+            require(query.get("command") == ["mlsub", "list"] + (["--active"] if query["source"] == "active" else []),
+                    "Composite scheduler command differs")
+            fresh(query["started_at"])
+            fresh(query["observed_at"])
+            source = Path(query["raw_proof"])
+            require(not source.is_symlink() and source.resolve().is_relative_to(artifacts.resolve())
+                    and digest(source) == query.get("raw_proof_sha256"), "Composite scheduler source SHA differs")
+            sources.append(f"# query={query['source']} observed_at={query['observed_at']}\n{source.read_text()}")
+        require(proof.read_text() == "\n".join(sources), "Composite scheduler proof differs from its query sources")
     ledger = owned_records(campaign)
     ids = {row["job_id"] for row in ledger}
     require(ids and len(scheduler["jobs"]) == len(ids)
@@ -155,15 +174,28 @@ def verify_scheduler(campaign: dict, scheduler: dict, inspection: dict, artifact
     require(current_records and all(row.get("mode") == "inspect" and row.get("gpus") == 0
                                    for row in current_records), "Inspection exemption is not an owned CPU inspect job")
     source = proof.read_text().splitlines()
+    parsed = []
+    for line in source:
+        fields = line.strip().split(None, 2)
+        if fields and fields[0].startswith("lm-mpi-job-"):
+            metadata = fields[2] if len(fields) == 3 else ""
+            parsed.append({"job_id": fields[0], "status": fields[1].lower() if len(fields) >= 2 else None,
+                           "line": line, "note": metadata.split("|note:", 1)[1].strip() if "|note:" in metadata else None,
+                           "owned_entry": "repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|" in metadata})
     terminal = []
     for row in scheduler["jobs"]:
-        matches = [line for line in source if line.split() and line.split()[0] == row["job_id"]]
-        require(len(matches) == 1 and row.get("source") == "fresh_exact_mlsub_list_row"
-                and row.get("evidence") == matches[0] and len(matches[0].split()) >= 3,
+        matches = [entry for entry in parsed if entry["job_id"] == row["job_id"]]
+        notes = {entry["note"] for entry in ledger if entry["job_id"] == row["job_id"] and entry.get("note")}
+        require(matches and row.get("source") == "fresh_exact_mlsub_list_row"
+                and row.get("evidence") in {entry["line"] for entry in matches},
                 "Scheduler job lacks unique fresh raw evidence")
-        require(matches[0].split()[1] == row.get("status"), "Scheduler status differs from raw source")
-        require("repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|" in matches[0],
-                "Scheduler job entry point differs")
+        require(len({entry["status"] for entry in matches}) == 1
+                and matches[0]["status"] == str(row.get("status")).lower(),
+                "Scheduler status differs or conflicts across sources")
+        require(len(notes) == 1 and {entry["note"] for entry in matches} == notes
+                and all(entry["owned_entry"] for entry in matches), "Scheduler job entry point/note differs")
+        require(not any(entry["job_id"] != row["job_id"] and entry["note"] in notes for entry in parsed),
+                "Multiple scheduler job IDs share an owned submission note")
         if row["job_id"] != current:
             require(str(row.get("status")).lower() in TERMINAL, "An owned allocation is not terminal")
             terminal.append(row["job_id"])

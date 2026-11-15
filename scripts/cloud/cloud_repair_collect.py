@@ -91,23 +91,65 @@ def owned_records(campaign: dict) -> list[dict]:
     return rows
 
 
+def query_listings(deadline: float, artifacts: Path, prefix: str) -> list[dict]:
+    """The gateway's unfiltered endpoint can omit live jobs entirely."""
+    queries = []
+    for source, command in (("full", ["mlsub", "list"]),
+                            ("active", ["mlsub", "list", "--active"])):
+        started = now()
+        try:
+            transport = remote_cli(command, deadline, 30)
+        except (OSError, RuntimeError) as error:
+            transport = {"stdout": "", "returncode": None, "ssh_returncode": None,
+                         "timed_out": True, "error_type": type(error).__name__}
+        raw = text(transport.get("stdout"))
+        proof = artifacts / f"{prefix}-{source}.log"
+        proof.write_text(raw)
+        save(artifacts / f"{prefix}-{source}-transport.json", transport)
+        queries.append({"source": source, "started_at": started, "observed_at": now(),
+                        "command": command, "raw_proof": str(proof),
+                        "raw_proof_sha256": digest(proof), "stdout": raw,
+                        "cli_returncode": transport.get("returncode"),
+                        "ssh_returncode": transport.get("ssh_returncode"),
+                        "timed_out": bool(transport.get("timed_out") or transport.get("ssh_timed_out")),
+                        "complete": transport.get("returncode") == 0
+                            and transport.get("ssh_returncode") == 0
+                            and not (transport.get("timed_out") or transport.get("ssh_timed_out")
+                                     or transport.get("envelope_incomplete"))})
+    return queries
+
+
+def listing_rows(queries: list[dict]) -> list[dict]:
+    rows = []
+    for query in queries:
+        for line in query["stdout"].splitlines():
+            fields = line.strip().split(None, 2)
+            if not fields or not JOB_ID.fullmatch(fields[0]):
+                continue
+            metadata = fields[2] if len(fields) == 3 else ""
+            rows.append({"job_id": fields[0], "status": fields[1] if len(fields) > 1 else None, "line": line,
+                         "note": metadata.split("|note:", 1)[1].strip() if "|note:" in metadata else None,
+                         "owned_entry": "repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|" in metadata,
+                         "query": query["source"], "observed_at": query["observed_at"]})
+    return rows
+
+
 def scheduler(deadline: float) -> dict:
     with ledger_lock(deadline):
         campaign = json.loads((ARTIFACTS / "campaign.json").read_text())
         if campaign.get("campaign") != CAMPAIGN:
             raise ValueError("Scheduler ledger belongs to another campaign")
         owned = {row["job_id"] for row in owned_records(campaign)}
-    transport = remote_cli(["mlsub", "list"], deadline, 45)
-    raw = text(transport.get("stdout"))
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    queries = query_listings(deadline, ARTIFACTS, "scheduler-list-" + stamp)
+    raw = "\n".join(f"# query={row['source']} observed_at={row['observed_at']}\n{row['stdout']}" for row in queries)
     proof = ARTIFACTS / ("scheduler-list-" + stamp + ".log")
     proof.write_text(raw)
-    save(ARTIFACTS / ("scheduler-transport-" + stamp + ".json"), transport)
     matches = {}
-    for line in raw.splitlines():
-        fields = line.strip().split(None, 2)
-        if len(fields) == 3 and fields[0] in owned:
-            matches.setdefault(fields[0], []).append((fields[1], line))
+    all_rows = listing_rows(queries)
+    for row in all_rows:
+        if row["job_id"] in owned:
+            matches.setdefault(row["job_id"], []).append(row)
     results = []
     with ledger_lock(deadline):
         campaign = json.loads((ARTIFACTS / "campaign.json").read_text())
@@ -116,23 +158,33 @@ def scheduler(deadline: float) -> dict:
             grouped.setdefault(row["job_id"], []).append(row)
         for job, records in grouped.items():
             candidates = matches.get(job, [])
-            valid = len(candidates) == 1 and (
-                "repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|" in candidates[0][1])
+            notes = {row["note"] for row in records if row.get("note")}
+            duplicate_note = any(row["job_id"] != job and row["note"] in notes for row in all_rows)
+            valid = bool(candidates) and all(row["owned_entry"] and isinstance(row["status"], str)
+                                             and isinstance(row["note"], str) and row["note"] for row in candidates)
+            valid = valid and len({row["status"].lower() for row in candidates}) == 1
+            valid = valid and len({row["note"] for row in candidates}) == 1 and not duplicate_note
+            valid = valid and (not notes or notes == {row["note"] for row in candidates})
             result = {"job_id": job, "status": None, "source": "not_uniquely_listed",
                       "historical_status": records[0].get("scheduler_status")}
             if valid:
-                status, line = candidates[0]
-                result.update(status=status, source="fresh_exact_mlsub_list_row", evidence=line)
+                latest = max(candidates, key=lambda row: row["observed_at"])
+                status = latest["status"]
+                result.update(status=status, source="fresh_exact_mlsub_list_row", evidence=latest["line"],
+                              evidence_queries=sorted({row["query"] for row in candidates}),
+                              observed_at=latest["observed_at"])
                 for row in records:
-                    row.update(scheduler_status=status, scheduler_observed_at=now(),
+                    row.update(scheduler_status=status, scheduler_observed_at=latest["observed_at"],
                                scheduler_evidence=str(proof))
             results.append(result)
         save(ARTIFACTS / "campaign.json", campaign)
     snapshot = {"campaign": CAMPAIGN, "timestamp": now(), "jobs": results,
                 "raw_proof": str(proof), "raw_proof_sha256": digest(proof),
-                "cli_returncode": transport.get("returncode"),
-                "ssh_returncode": transport["ssh_returncode"],
-                "timed_out": bool(transport.get("timed_out") or transport["ssh_timed_out"])}
+                "cli_returncode": 0 if all(row["complete"] for row in queries) else None,
+                "ssh_returncode": 0 if all(row["ssh_returncode"] == 0 for row in queries) else None,
+                "timed_out": any(row["timed_out"] for row in queries),
+                "queries": [{key: value for key, value in row.items() if key != "stdout"} for row in queries],
+                "listings_complete": all(row["complete"] for row in queries), "absence_proof": False}
     save(ARTIFACTS / "scheduler-snapshot.json", snapshot)
     return snapshot
 

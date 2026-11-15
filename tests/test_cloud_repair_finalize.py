@@ -90,8 +90,9 @@ def complete(tmp_path, monkeypatch):
                  "cli_returncode": 0, "ssh_returncode": 0, "timed_out": False}
     lines = []
     for job in final.owned_records(campaign):
+        job["note"] = "repair_" + job["job_id"]
         status = "Running" if job["mode"] == "inspect" else "Completed"
-        line = job["job_id"] + " " + status + " repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|note:test"
+        line = job["job_id"] + " " + status + " repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|note:" + job["note"]
         lines.append(line)
         scheduler["jobs"].append({"job_id": job["job_id"], "status": status,
                                   "source": "fresh_exact_mlsub_list_row", "evidence": line})
@@ -220,3 +221,51 @@ def test_wandb_transport_label_without_local_file_proof_refuses_authority(comple
 def test_storage_at_reserve_refuses_authority(complete):
     modify(complete, "inspection-latest.json", lambda value: value["filesystems"][0].update(available_bytes=5_000_000_000))
     with pytest.raises(ValueError, match="Storage"): final.finalize(*complete)
+
+
+def composite(complete, damage=None):
+    artifacts, _ = complete
+    scheduler_path = artifacts / "scheduler-snapshot.json"
+    scheduler = json.loads(scheduler_path.read_text())
+    base = Path(scheduler["raw_proof"]).read_text()
+    active = base
+    if damage == "status": active = active.replace("Completed", "Running", 1)
+    elif damage == "note": active = active.replace("|note:repair_lm-mpi-job-0abc", "|note:different", 1)
+    elif damage == "entry": active = active.replace("repo:dimativator/LoRA-TSD", "repo:someone/else", 1)
+    elif damage == "missing_note": active = active.replace("|note:repair_lm-mpi-job-0abc", "", 1)
+    elif damage == "truncated": active = "lm-mpi-job-0abc\n" + "\n".join(active.splitlines()[1:]) + "\n"
+    elif damage == "duplicate_note": active += active.splitlines()[0].replace("lm-mpi-job-0abc ", "lm-mpi-job-abab ", 1) + "\n"
+    elif damage == "normalized": active = active.replace("Completed", "completed")
+    queries, chunks = [], []
+    timestamp = datetime.now(timezone.utc).isoformat()
+    for source, content in (("full", base), ("active", active)):
+        proof = artifacts / (source + ".log")
+        proof.write_text(content)
+        queries.append({"source": source, "command": ["mlsub", "list"] + (["--active"] if source == "active" else []),
+                        "started_at": timestamp, "observed_at": timestamp, "raw_proof": str(proof),
+                        "raw_proof_sha256": final.digest(proof), "cli_returncode": 0, "ssh_returncode": 0,
+                        "timed_out": False, "complete": True})
+        chunks.append(f"# query={source} observed_at={timestamp}\n{content}")
+    Path(scheduler["raw_proof"]).write_text("\n".join(chunks))
+    scheduler.update(queries=queries, listings_complete=True, absence_proof=False,
+                     raw_proof_sha256=final.digest(Path(scheduler["raw_proof"])))
+    if damage == "query_sha": scheduler["queries"][0]["raw_proof_sha256"] = "0" * 64
+    elif damage == "transport": scheduler["queries"][1]["cli_returncode"] = 1
+    elif damage == "missing_query": scheduler["queries"].pop()
+    elif damage == "composite_sha":
+        Path(scheduler["raw_proof"]).write_text(Path(scheduler["raw_proof"]).read_text() + "extra\n")
+        scheduler["raw_proof_sha256"] = final.digest(Path(scheduler["raw_proof"]))
+    write(scheduler_path, scheduler)
+
+
+@pytest.mark.parametrize("variation", [None, "normalized"])
+def test_consistent_dual_view_duplicate_rows_are_accepted(complete, variation):
+    composite(complete, variation)
+    assert final.finalize(*complete)["verified_runs"] == 8
+
+
+@pytest.mark.parametrize("damage", ["status", "note", "entry", "missing_note", "truncated", "duplicate_note", "query_sha", "transport", "missing_query", "composite_sha"])
+def test_conflicting_or_unproven_composite_scheduler_refuses_authority(complete, damage):
+    composite(complete, damage)
+    with pytest.raises(ValueError): final.finalize(*complete)
+    assert not (complete[0] / "cleanup-authorization.json").exists()
