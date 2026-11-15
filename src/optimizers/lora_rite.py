@@ -7,18 +7,31 @@ from torch.optim.optimizer import Optimizer
 
 
 def create_preconditioner(x):
-  return torch.zeros((x.shape[-1], x.shape[-1]), dtype=x.dtype, device=x.device)
+  # Only the rank-sized covariance needs double precision, not the LoRA factors.
+  return torch.zeros((x.shape[-1], x.shape[-1]), dtype=torch.float64, device=x.device)
 
 
 class _LoraRiteHelper:
   def __init__(self, maybe_inf_to_nan: bool = True):
     self._maybe_inf_to_nan = maybe_inf_to_nan
+    self.reset_diagnostics()
+
+  def reset_diagnostics(self):
+    self.diagnostics = {
+        "min_covariance_eigenvalue": 0.0,
+        "roundoff_eigenvalues_clamped": 0,
+        "skipped_factor_updates": 0,
+        "zero_preconditioned_updates": 0,
+    }
+
+  def require_finite(self, value, name):
+    if not torch.isfinite(value).all():
+      raise FloatingPointError(f"LoRA-Rite nonfinite {name}")
+    return value
 
   def inf_to_nan(self, array):
-    """Replace infinite values with NaN."""
-    if not self._maybe_inf_to_nan:
-      return array
-    return torch.nan_to_num(array, nan=torch.nan, posinf=torch.nan, neginf=torch.nan)
+    """Do not silently turn an invalid optimizer calculation into a zero update."""
+    return self.require_finite(array, "gradient or update")
 
   def bias_corrected_decay(self, step, decay: float):
     """Return the bias-corrected exponential decay."""
@@ -37,19 +50,45 @@ class _LoraRiteHelper:
     _, shape = self.move_lora_dim_to_last(p, dim)
     return self.restore_original_shape_and_dim(x, dim, shape)
 
+  def spectral_preconditioner(self, x, esc, epsilon, relative_epsilon):
+    """Evaluate the PSD spectral map without accepting materially negative modes.
+
+    The active campaign rule is 1/(sqrt(lambda + escape) + epsilon).
+    epsilon_root was unused in the original implementation; no additional ridge
+    is introduced here. Relative mode scales epsilon by the covariance RMS scale.
+    """
+    self.require_finite(x, "covariance")
+    source_epsilon = torch.finfo(x.dtype).eps
+    covariance = self.make_symmetric(x.to(torch.float64))
+    w, v = torch.linalg.eigh(covariance)
+    self.require_finite(w, "covariance eigenvalues")
+    scale = w.abs().max()
+    tolerance = 8 * x.shape[-1] * source_epsilon * scale
+    if (w < -tolerance).any():
+      raise FloatingPointError("LoRA-Rite covariance is materially indefinite")
+    minimum = float(w.min())
+    self.diagnostics["min_covariance_eigenvalue"] = min(
+        self.diagnostics["min_covariance_eigenvalue"], minimum)
+    self.diagnostics["roundoff_eigenvalues_clamped"] += int((w < 0).sum())
+    w = w.clamp_min(0)
+    escape = torch.as_tensor(esc, dtype=w.dtype, device=w.device)
+    self.require_finite(escape, "escape mass")
+    if (escape < 0).any():
+      raise FloatingPointError("LoRA-Rite escape mass must be nonnegative")
+    regularizer = epsilon * torch.sqrt(scale) if relative_epsilon else epsilon
+    denominator = torch.sqrt(w + escape) + regularizer
+    # With epsilon=0, use the Moore-Penrose value on an exact zero mode.
+    weights = torch.zeros_like(denominator)
+    nonzero = denominator > 0
+    weights[nonzero] = denominator[nonzero].reciprocal()
+    self.require_finite(weights, "inverse-square-root weights")
+    return v, weights
+
   def inverse_sqrt(self, x, esc, epsilon, epsilon_root, relative_epsilon=True, force_positive=False):
-    if relative_epsilon:
-      eps = torch.max(torch.linalg.eigvalsh(p_new))*epsilon_root
-    else:
-      eps = epsilon_root
-
-    w, v = torch.linalg.eigh(x)
-    if force_positive:
-      w = torch.maximum(w, torch.zeros_like(w))
-
-    w = 1 / (torch.sqrt(w + esc) + epsilon)
-    w = torch.unsqueeze(w, 0)
-    return self.make_symmetric(v * w @ v.T).to(x.dtype)
+    # epsilon_root/force_positive remain accepted for source compatibility. PSD
+    # roundoff is always handled, while genuine indefiniteness is always rejected.
+    v, weights = self.spectral_preconditioner(x, esc, epsilon, relative_epsilon)
+    return self.make_symmetric((v * weights) @ v.T).to(x.dtype)
 
   def make_symmetric(self, x):
     return (x + x.T) / 2
@@ -62,10 +101,10 @@ class _LoraRiteHelper:
   def transform_second_moment_to_new_basis(
       self, v, p
   ):
-    v_new = p @ v @ p.T
+    p = p.to(torch.float64)
+    v_new = p @ v.to(torch.float64) @ p.T
     v_new = self.make_symmetric(v_new)
-    v_new = torch.nan_to_num(v_new)
-    return v_new
+    return self.require_finite(v_new, "transported covariance")
 
   def get_unmagnified_rotate_second_escape(
       self, v_new, v_old
@@ -92,21 +131,27 @@ class _LoraRiteHelper:
       epsilon_root,
       relative_epsilon,
       apply_escape,
+      covariance_root=None,
   ):
-    u = g
-    q = self.make_symmetric(p)
-
     if not apply_escape:
       e = 0
-
-    use_combined_epsilon = True
-
-    qir = self.make_symmetric(
-      self.inverse_sqrt(q, e, epsilon, epsilon_root, relative_epsilon)
-    )
-    u = u@qir
-    u = torch.nan_to_num(u)
-    return u
+    self.require_finite(g, "unmagnified gradient")
+    v, weights = self.spectral_preconditioner(p, e, epsilon, relative_epsilon)
+    if covariance_root is not None:
+      self.require_finite(covariance_root, "covariance square root")
+      _, singular, vh = torch.linalg.svd(covariance_root, full_matrices=False)
+      v = vh.T
+      scale = singular.max() if relative_epsilon else 1.0
+      denominator = torch.sqrt(singular.square() + e) + epsilon * scale
+      weights = torch.zeros_like(denominator)
+      nonzero = denominator > 0
+      weights[nonzero] = denominator[nonzero].reciprocal()
+    # Applying the map in its eigenbasis avoids constructing an ill-conditioned
+    # FP32 inverse matrix whose large null-space weights cancel in the product.
+    u = ((g.to(torch.float64) @ v) * weights) @ v.T
+    self.require_finite(u, "preconditioned update")
+    self.diagnostics["zero_preconditioned_updates"] += int(torch.count_nonzero(u) == 0)
+    return self.require_finite(u.to(g.dtype), "cast preconditioned update")
 
   def update_moment(self, step, update,
                      m, beta: float):
@@ -135,9 +180,21 @@ class _LoraRiteHelper:
   def compute_second_moments(
       self, update
   ):
+    update = self.require_finite(update, "second-moment gradient").to(torch.float64)
     s = (update.T @ update) / update.shape[0]
     s = self.make_symmetric(s)
     return s
+
+  def update_second_root(self, step, update, root, rotation, beta2):
+    """QR square-root update, algebraically R.T R = beta*PVP.T + (1-beta)*G.T G/n.
+
+    Keeping R avoids losing tiny singular directions by forming normal equations
+    before applying the inverse square root. No ridge or rank cutoff is added.
+    """
+    decay = self.bias_corrected_decay(step, beta2)
+    old = decay**0.5 * (root @ rotation.to(torch.float64).T)
+    current = (1 - decay)**0.5 * update.to(torch.float64) / update.shape[0]**0.5
+    return torch.linalg.qr(torch.cat((old, current)), mode="r").R
 
   def update_second_moments(
       self, step, update, moments, beta2: float
@@ -177,6 +234,7 @@ class _LoraRiteHelper:
 
     if mean_update > skip_threshold:
       update = torch.zeros_like(update)
+      self.diagnostics["skipped_factor_updates"] += 1
     return update
 
 
@@ -244,9 +302,11 @@ class LoRARite(Optimizer):
     self.helper = _LoraRiteHelper()
     self.state_initialized = False
     self.count = 0
+    self.last_diagnostics = {}
 
   def step(self, closure=None):
     helper = self.helper
+    helper.reset_diagnostics()
     update_capping = self.update_capping
     update_skipping = self.update_skipping
     clip_unmagnified_grad = self.clip_unmagnified_grad
@@ -284,6 +344,8 @@ class LoRARite(Optimizer):
 
           state.v_l = create_preconditioner(param_l)
           state.v_r = create_preconditioner(param_r)
+          state.root_v_l = torch.zeros_like(state.v_l)
+          state.root_v_r = torch.zeros_like(state.v_r)
           state.m_l = torch.zeros_like(param_l)
           state.m_r = torch.zeros_like(param_r)
           state.basis_l = torch.zeros_like(param_l)
@@ -334,7 +396,7 @@ class LoRARite(Optimizer):
 
         g_norm_sq += torch.linalg.norm(update_l)**2
         g_norm_sq += torch.linalg.norm(update_r)**2
-    g_norm = torch.sqrt(g_norm_sq)
+    g_norm = helper.require_finite(torch.sqrt(g_norm_sq), "unmagnified gradient norm")
 
     for group in self.param_groups:
       for p1, p2 in list(zip(group["params"], group["params"][1:]))[::2]:
@@ -367,9 +429,6 @@ class LoRARite(Optimizer):
             update_l = update_l/g_norm*clip_unmagnified_grad
             update_r = update_r/g_norm*clip_unmagnified_grad
 
-        s_l = helper.compute_second_moments(update_l)
-        s_r = helper.compute_second_moments(update_r)
-
         transformed_v_l = helper.transform_second_moment_to_new_basis(
             state.v_l,
             p_l
@@ -399,8 +458,10 @@ class LoRARite(Optimizer):
         else:
           escape_l = escape_r = 0
 
-        v_l = helper.update_second_moments(count, s_l, transformed_v_l, beta2)
-        v_r = helper.update_second_moments(count, s_r, transformed_v_r, beta2)
+        root_v_l = helper.update_second_root(count, update_l, state.root_v_l, p_l, beta2)
+        root_v_r = helper.update_second_root(count, update_r, state.root_v_r, p_r, beta2)
+        v_l = helper.make_symmetric(root_v_l.T @ root_v_l)
+        v_r = helper.make_symmetric(root_v_r.T @ root_v_r)
 
         update_l = helper.get_preconditioned_update(
             update_l,
@@ -410,6 +471,7 @@ class LoRARite(Optimizer):
             epsilon_root,
             relative_epsilon,
             apply_escape,
+            covariance_root=root_v_l,
         )
         update_r = helper.get_preconditioned_update(
             update_r,
@@ -419,6 +481,7 @@ class LoRARite(Optimizer):
             epsilon_root,
             relative_epsilon,
             apply_escape,
+            covariance_root=root_v_r,
         )
 
         m_l = helper.transform_first_moment_to_new_basis(
@@ -467,15 +530,23 @@ class LoRARite(Optimizer):
 
         update_l = helper.restore_param_shape(update_l, p1.data, lora_l_dim)
         update_r = helper.restore_param_shape(update_r, p2.data, lora_r_dim)
+        helper.require_finite(update_l, "left parameter delta")
+        helper.require_finite(update_r, "right parameter delta")
         p1.data.add_(update_l.to(p1.data.dtype))
         p2.data.add_(update_r.to(p2.data.dtype))
+        helper.require_finite(p1.data, "left parameter")
+        helper.require_finite(p2.data, "right parameter")
 
         state.step += 1
         state.v_l = v_l
         state.v_r = v_r
+        state.root_v_l = root_v_l
+        state.root_v_r = root_v_r
         state.m_l = m_l
         state.m_r = m_r
         state.escape_l = escape_l
         state.escape_r = escape_r
 
+    self.last_diagnostics = dict(helper.diagnostics)
+    self.last_diagnostics["unmagnified_gradient_norm"] = float(g_norm)
     return loss
