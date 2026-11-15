@@ -141,6 +141,7 @@ def verify_scheduler(campaign: dict, scheduler: dict, inspection: dict, artifact
     require(scheduler.get("campaign") == CAMPAIGN, "Scheduler belongs to another campaign")
     fresh(scheduler["timestamp"])
     require(not campaign.get("ambiguous_submissions"), "Submission ambiguity remains")
+    require(not campaign.get("unresolved_auxiliary_submissions"), "Deferred CPU observation remains unresolved")
     require(scheduler.get("cli_returncode") == 0 and scheduler.get("ssh_returncode") == 0
             and scheduler.get("timed_out") is False, "Scheduler transport is incomplete")
     proof = Path(scheduler["raw_proof"])

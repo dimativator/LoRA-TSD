@@ -157,3 +157,86 @@ def test_extended_submission_timeout_preserves_intent_and_blocks_duplicate(ledge
     monkeypatch.setattr(submit.subprocess, "run", lambda *a, **k: pytest.fail("Duplicate submission attempted"))
     with pytest.raises(RuntimeError, match="pending submission"):
         submit.main()
+
+
+def test_defer_only_cpu_observation_preserves_record_and_limits_one(ledger):
+    _, value = ledger
+    original = dict(value["ambiguous_submissions"][0])
+    submit.defer_inspection(value)
+    assert not value["ambiguous_submissions"]
+    retained = value["unresolved_auxiliary_submissions"][0]
+    assert all(retained[k] == v for k, v in original.items())
+    assert retained["deferred_at"] and retained["reason"]
+    value["ambiguous_submissions"] = [original]
+    with pytest.raises(RuntimeError):
+        submit.defer_inspection(value)
+
+
+@pytest.mark.parametrize("change", [{"mode":"worker","worker":0,"gpus":1}, {"mode":"prepare"}, {"mode":"cleanup"}, {"mode":"reconcile"}, {"gpus":1}, {"gpus":False}, {"worker":0}])
+def test_defer_never_waives_gpu_or_mutating_ambiguity(ledger, change):
+    _, value = ledger
+    value["ambiguous_submissions"][0].update(change)
+    with pytest.raises(RuntimeError):
+        submit.defer_inspection(value)
+    assert value["ambiguous_submissions"] and not value.get("unresolved_auxiliary_submissions")
+
+
+def test_deferred_cpu_receipt_recovery_retains_main_pending(ledger, monkeypatch):
+    root, value = ledger
+    submit.defer_inspection(value)
+    current = {**value["unresolved_auxiliary_submissions"][0], "note":"new_inspection"}
+    value["ambiguous_submissions"] = [current]
+    submit.save(root / "campaign.json", value)
+    monkeypatch.setattr(collector, "remote_cli", lambda *a: {"stdout":line(), "returncode":0,"ssh_returncode":0,"timed_out":False})
+    submit.recover(auxiliary=True)
+    result = json.loads((root/"campaign.json").read_text())
+    assert result["ambiguous_submissions"] == [current]
+    assert not result["unresolved_auxiliary_submissions"]
+    assert result["auxiliary_jobs"][0]["job_id"] == JOB
+
+
+@pytest.mark.parametrize("mode", ["worker", "preflight"])
+def test_deferred_gpu_metadata_cannot_bypass_allocation_guard(ledger, monkeypatch, mode):
+    root, value = ledger
+    value.update(ambiguous_submissions=[], unresolved_auxiliary_submissions=[{"mode":"worker","gpus":1,"worker":0}])
+    submit.save(root / "campaign.json", value)
+    monkeypatch.setattr(sys, "argv", ["submit", mode] + (["--worker-id","0"] if mode == "worker" else []))
+    monkeypatch.setattr(submit.subprocess, "run", lambda *a, **k: pytest.fail("Unproven GPU allocation reached submit"))
+    with pytest.raises(RuntimeError, match="proven CPU-only"):
+        submit.main()
+
+
+def test_deferred_cpu_does_not_waive_fresh_ready_or_cleanup(ledger, monkeypatch):
+    root, value = ledger
+    submit.defer_inspection(value)
+    value.update(review_passed=True, assets_ready_verified=False)
+    submit.save(root / "campaign.json", value)
+    monkeypatch.setattr(submit.subprocess, "run", lambda *a, **k: pytest.fail("Readiness/cleanup guard bypassed"))
+    monkeypatch.setattr(sys, "argv", ["submit","worker","--worker-id","0"])
+    with pytest.raises(AssertionError): submit.main()
+    monkeypatch.setattr(sys, "argv", ["submit","cleanup"])
+    with pytest.raises(AssertionError, match="audited before cleanup"): submit.main()
+
+
+def test_refresh_is_one_distinct_cpu_request_with_old_intent_retained(ledger, monkeypatch):
+    root, value = ledger
+    value["source_revision"] = "reviewed-dev"
+    submit.save(root / "campaign.json", value)
+    monkeypatch.setattr(submit.netrc, "netrc", lambda: SimpleNamespace(authenticators=lambda host:("api",None,"testkey")))
+    monkeypatch.setattr(sys, "argv", ["submit", "refresh-inspection"])
+    def run(command, **kwargs):
+        tree = ast.parse(kwargs["input"])
+        remote = ast.literal_eval(next(n.value for n in tree.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=="command" for t in n.targets)))
+        assert remote[remote.index("--gpus")+1] == "cpu"
+        assert remote[remote.index("--args")+1] == "inspect"
+        current = json.loads((root/"campaign.json").read_text())
+        assert current["unresolved_auxiliary_submissions"][0]["note"] == NOTE
+        assert len(current["ambiguous_submissions"]) == 1
+        assert current["ambiguous_submissions"][0]["note"] != NOTE
+        return SimpleNamespace(returncode=0,stdout=SECOND,stderr="")
+    monkeypatch.setattr(submit.subprocess,"run",run)
+    submit.main()
+    current=json.loads((root/"campaign.json").read_text())
+    assert not current["ambiguous_submissions"] and not current["jobs"]
+    assert current["unresolved_auxiliary_submissions"][0]["note"] == NOTE
+    assert current["auxiliary_jobs"][0]["job_id"] == SECOND

@@ -269,3 +269,10 @@ def test_conflicting_or_unproven_composite_scheduler_refuses_authority(complete,
     composite(complete, damage)
     with pytest.raises(ValueError): final.finalize(*complete)
     assert not (complete[0] / "cleanup-authorization.json").exists()
+
+
+def test_deferred_cpu_observation_blocks_final_cleanup_authority(complete):
+    modify(complete, "campaign.json", lambda value: value.update(unresolved_auxiliary_submissions=[{"mode":"inspect","gpus":0,"worker":None,"note":"retained"}]))
+    with pytest.raises(ValueError, match="Deferred CPU observation"):
+        final.finalize(*complete)
+    assert not (complete[0]/"cleanup-authorization.json").exists()

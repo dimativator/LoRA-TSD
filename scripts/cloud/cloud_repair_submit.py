@@ -19,15 +19,39 @@ SSH = ["ssh", "-o", "ClearAllForwardings=yes", "-o", "BatchMode=yes", "-o", "Con
        "-o", "ServerAliveCountMax=2", "brain_lab"]
 
 
-def recover() -> None:
+def cpu_inspection(record: dict) -> bool:
+    return (record.get("mode") == "inspect" and type(record.get("gpus")) is int
+            and record["gpus"] == 0 and record.get("worker") is None)
+
+
+def defer_inspection(campaign: dict) -> None:
+    """Retain one uncertain CPU observation without blocking independent training."""
+    pending = campaign.get("ambiguous_submissions", [])
+    if len(pending) != 1 or campaign.get("unresolved_auxiliary_submissions"):
+        raise RuntimeError("Only one unresolved CPU observation may be deferred")
+    record = pending[0]
+    if not cpu_inspection(record):
+        raise RuntimeError("GPU or state-changing submissions must be resolved before proceeding")
+    campaign["unresolved_auxiliary_submissions"] = [{**record, "deferred_at": now(),
+        "reason": "User resumed launch after CPU-only ambiguity was explained; retain for final audit"}]
+    campaign["ambiguous_submissions"] = []
+
+
+def recover(auxiliary: bool = False) -> None:
     with locked(ARTIFACTS / "submission.lock"):
         campaign = json.loads((ARTIFACTS / "campaign.json").read_text())
-        pending = campaign.get("ambiguous_submissions", [])
+        deferred = campaign.get("unresolved_auxiliary_submissions", [])
+        if len(deferred) > 1 or any(not cpu_inspection(row) for row in deferred):
+            raise RuntimeError("Unresolved allocation must be proven CPU-only before proceeding")
+        key = "unresolved_auxiliary_submissions" if auxiliary else "ambiguous_submissions"
+        pending = campaign.get(key, [])
         if not pending:
             print("No ambiguous repair submission")
             return
         assert len(pending) == 1
         intent = pending[0]
+        if auxiliary:
+            assert intent["mode"] == "inspect" and intent["gpus"] == 0 and intent["worker"] is None
         if intent["mode"] == "worker":
             assert intent["worker"] in range(len(TASKS)) and intent["gpus"] == 1
             assert len(campaign["jobs"]) < len(TASKS)
@@ -61,23 +85,30 @@ def recover() -> None:
         collection = "jobs" if intent["mode"] == "worker" else "auxiliary_jobs"
         assert not any(row["job_id"] == record["job_id"] for row in campaign[collection])
         campaign[collection].append(record)
-        campaign["ambiguous_submissions"] = []
+        campaign[key] = []
         save(ARTIFACTS / "campaign.json", campaign)
         print(json.dumps(record, indent=2))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["preflight", "prepare", "worker", "inspect", "cleanup", "reconcile", "recover"])
+    parser.add_argument("mode", choices=["preflight", "prepare", "worker", "inspect", "cleanup", "reconcile", "recover", "recover-auxiliary", "refresh-inspection"])
     parser.add_argument("--worker-id", type=int, choices=range(len(TASKS)))
     args = parser.parse_args()
-    if args.mode == "recover":
-        recover()
+    if args.mode in {"recover", "recover-auxiliary"}:
+        recover(args.mode == "recover-auxiliary")
         return
     if args.mode == "worker" and args.worker_id is None:
         parser.error("Worker mode requires --worker-id")
     with locked(ARTIFACTS / "submission.lock"):
         campaign = json.loads((ARTIFACTS / "campaign.json").read_text())
+        if args.mode == "refresh-inspection":
+            defer_inspection(campaign)
+            save(ARTIFACTS / "campaign.json", campaign)
+            args.mode = "inspect"
+        deferred = campaign.get("unresolved_auxiliary_submissions", [])
+        if len(deferred) > 1 or any(not cpu_inspection(row) for row in deferred):
+            raise RuntimeError("Unresolved allocation must be proven CPU-only before proceeding")
         if campaign.get("ambiguous_submissions"):
             raise RuntimeError("Recover the unique pending submission note before creating another job")
         if args.mode == "worker":
@@ -107,10 +138,11 @@ def main() -> None:
         if args.mode == "worker":
             environment["PAPER8B_REPAIR_BUNDLE_SHA256"] = campaign["runtime_bundle_sha256"]
         if args.mode in {"cleanup", "reconcile"}:
+            assert not campaign.get("unresolved_auxiliary_submissions"), "Deferred CPU inspection must be audited before cleanup"
             confirmation = json.loads((ARTIFACTS / "cleanup-authorization.json").read_text())
             assert confirmation["verified_runs"] == len(TASKS)
             environment.update(encode_audit_environment("REPAIR_FINAL_AUDIT", confirmation))
-        number = len(campaign["jobs"]) + len(campaign["auxiliary_jobs"])
+        number = len(campaign["jobs"]) + len(campaign["auxiliary_jobs"]) + len(campaign.get("unresolved_auxiliary_submissions", []))
         intent = f"{args.mode}-{args.worker_id if args.worker_id is not None else number}"
         note = "repair8b_" + intent + "_" + now().replace(":", "").replace("+", "_").replace(".", "_")
         if args.mode == "inspect":
