@@ -218,25 +218,38 @@ def merge_submission(note: str, output: str, proof: Path, returncode: int | None
         return record
 
 
+def deferred_inspections(campaign: dict) -> list:
+    records = campaign.get("unresolved_auxiliary_submissions", [])
+    if len(records) > 4 or any(not cpu_inspection(row) for row in records):
+        raise RuntimeError("At most four unresolved observations must be proven CPU-only before proceeding")
+    notes = [row.get("note") for row in records]
+    if any(not isinstance(note, str) or not re.fullmatch(r"repair8b_inspect-[A-Za-z0-9_.-]+", note) for note in notes) or len(notes) != len(set(notes)):
+        raise RuntimeError("Deferred CPU observations require distinct exact inspection notes")
+    return records
+
+
 def defer_inspection(campaign: dict) -> None:
-    """Retain one uncertain CPU observation without blocking independent training."""
+    """Retain at most four uncertain read-only CPU observations without losing evidence."""
     pending = campaign.get("ambiguous_submissions", [])
-    if len(pending) != 1 or campaign.get("unresolved_auxiliary_submissions"):
-        raise RuntimeError("Only one unresolved CPU observation may be deferred")
+    deferred = deferred_inspections(campaign)
+    if len(pending) != 1 or len(deferred) >= 4:
+        raise RuntimeError("Only one current CPU observation may be deferred, with a maximum of four retained")
     record = pending[0]
     if not cpu_inspection(record):
         raise RuntimeError("GPU or state-changing submissions must be resolved before proceeding")
-    campaign["unresolved_auxiliary_submissions"] = [{**record, "deferred_at": now(),
-        "reason": "User resumed launch after CPU-only ambiguity was explained; retain for final audit"}]
+    note = record.get("note")
+    if (not isinstance(note, str) or not re.fullmatch(r"repair8b_inspect-[A-Za-z0-9_.-]+", note)
+            or any(row["note"] == note for row in deferred)):
+        raise RuntimeError("Deferred CPU observations require distinct exact inspection notes")
+    campaign["unresolved_auxiliary_submissions"] = [*deferred, {**record, "deferred_at": now(),
+        "reason": "Retain unresolved read-only CPU observation while allowing a bounded fresh inspection"}]
     campaign["ambiguous_submissions"] = []
 
 
 def recover(auxiliary: bool = False) -> None:
     with locked(ARTIFACTS / "submission.lock"):
         campaign = json.loads((ARTIFACTS / "campaign.json").read_text())
-        deferred = campaign.get("unresolved_auxiliary_submissions", [])
-        if len(deferred) > 1 or any(not cpu_inspection(row) for row in deferred):
-            raise RuntimeError("Unresolved allocation must be proven CPU-only before proceeding")
+        deferred = deferred_inspections(campaign)
         key = "unresolved_auxiliary_submissions" if auxiliary else "ambiguous_submissions"
         pending = campaign.get(key, [])
         if not pending:
@@ -245,7 +258,7 @@ def recover(auxiliary: bool = False) -> None:
         assert len({row["note"] for row in pending}) == len(pending), "Duplicate pending note"
         reserved_gpu_slots(campaign)
         if auxiliary:
-            assert len(pending) == 1 and cpu_inspection(pending[0])
+            assert 1 <= len(pending) <= 4 and all(cpu_inspection(row) for row in pending)
         from cloud_repair_collect import query_listings, listing_rows
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         prefix = "recovery-" + ("auxiliary" if auxiliary else "pending") + "-" + stamp
@@ -318,9 +331,7 @@ def main(argv: list | None = None) -> None:
             defer_inspection(campaign)
             save(ARTIFACTS / "campaign.json", campaign)
             args.mode = "inspect"
-        deferred = campaign.get("unresolved_auxiliary_submissions", [])
-        if len(deferred) > 1 or any(not cpu_inspection(row) for row in deferred):
-            raise RuntimeError("Unresolved allocation must be proven CPU-only before proceeding")
+        deferred = deferred_inspections(campaign)
         replacement = replace_unreceived(campaign, args.worker_id) if args.replace_unreceived else {}
         pending = campaign.get("ambiguous_submissions", [])
         reserved = reserved_gpu_slots(campaign)

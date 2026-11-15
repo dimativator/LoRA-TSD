@@ -694,3 +694,84 @@ def test_known_extra_allocation_blocks_replacement_at_cap(ledger,monkeypatch):
     with pytest.raises(AssertionError,match='exceeds ten'):
         submit.main(['worker','--worker-id','0','--replace-unreceived'])
     assert not json.loads((root/'campaign.json').read_text()).get('superseded_unreceived_gpu_intents')
+
+
+def deferred_cpu(number):
+    return {'intent':f'inspect-{number}','mode':'inspect','worker':None,'gpus':0,
+            'note':f'repair8b_inspect-{number}_exact','created_at':f'original-{number}'}
+
+
+def test_refresh_appends_second_cpu_deferral_preserving_first_observation(ledger,monkeypatch):
+    root,value=ledger
+    old=deferred_cpu(4)
+    current=deferred_cpu(20)
+    value.update(source_revision='reviewed-dev',unresolved_auxiliary_submissions=[old],ambiguous_submissions=[current])
+    submit.save(root/'campaign.json',value)
+    monkeypatch.setattr(submit.netrc,'netrc',lambda:SimpleNamespace(authenticators=lambda host:('api',None,'test-only-key')))
+    def network(*a,**k):
+        snapshot=json.loads((root/'campaign.json').read_text())
+        assert snapshot['unresolved_auxiliary_submissions'][0]==old
+        assert all(snapshot['unresolved_auxiliary_submissions'][1][key]==v for key,v in current.items())
+        assert len(snapshot['ambiguous_submissions'])==1
+        assert snapshot['ambiguous_submissions'][0]['mode']=='inspect' and snapshot['ambiguous_submissions'][0]['gpus']==0
+        assert snapshot['reserved_gpu_slots']==0
+        return SimpleNamespace(returncode=0,stdout=JOB,stderr='')
+    monkeypatch.setattr(submit.subprocess,'run',network)
+    submit.main(['refresh-inspection'])
+    result=json.loads((root/'campaign.json').read_text())
+    assert result['unresolved_auxiliary_submissions'][0]==old
+    assert len(result['unresolved_auxiliary_submissions'])==2 and not result['ambiguous_submissions']
+    assert result['auxiliary_jobs'][0]['gpus']==0 and not result['jobs']
+
+
+def test_deferred_cpu_bound_is_four_and_fifth_preserves_every_original(ledger):
+    _,value=ledger
+    value['unresolved_auxiliary_submissions']=[deferred_cpu(i) for i in range(3)]
+    value['ambiguous_submissions']=[deferred_cpu(20)]
+    originals=json.loads(json.dumps(value['unresolved_auxiliary_submissions']))
+    submit.defer_inspection(value)
+    assert value['unresolved_auxiliary_submissions'][:3]==originals
+    assert len(submit.deferred_inspections(value))==4
+    fourth=json.loads(json.dumps(value['unresolved_auxiliary_submissions']))
+    value['ambiguous_submissions']=[deferred_cpu(21)]
+    with pytest.raises(RuntimeError,match='maximum of four'):
+        submit.defer_inspection(value)
+    assert value['unresolved_auxiliary_submissions']==fourth and value['ambiguous_submissions']==[deferred_cpu(21)]
+
+
+@pytest.mark.parametrize('damage',['duplicate','noncpu','overcap','missingnote','currentduplicate','mixedpending'])
+def test_deferred_cpu_validation_rejects_duplicates_or_non_cpu_without_network(ledger,monkeypatch,damage):
+    root,value=ledger
+    value.update(source_revision='reviewed-dev',unresolved_auxiliary_submissions=[deferred_cpu(4)],ambiguous_submissions=[deferred_cpu(20)])
+    if damage=='duplicate':value['unresolved_auxiliary_submissions']*=2
+    if damage=='noncpu':value['unresolved_auxiliary_submissions'][0]['mode']='prepare'
+    if damage=='overcap':value['unresolved_auxiliary_submissions']=[deferred_cpu(i) for i in range(5)]
+    if damage=='missingnote':value['unresolved_auxiliary_submissions'][0].pop('note')
+    if damage=='currentduplicate':value['ambiguous_submissions']=[deferred_cpu(4)]
+    if damage=='mixedpending':value['ambiguous_submissions'].append(gpu_pending(0))
+    submit.save(root/'campaign.json',value)
+    monkeypatch.setattr(submit.subprocess,'run',lambda *a,**k:pytest.fail('Invalid deferral reached network'))
+    with pytest.raises(RuntimeError):submit.main(['refresh-inspection'])
+    assert json.loads((root/'campaign.json').read_text())==value
+
+
+def test_recover_one_of_four_deferred_cpu_observations_keeps_other_notes_and_gpu_pending(ledger,monkeypatch):
+    root,value=ledger
+    observations=[deferred_cpu(i) for i in range(4)]
+    value.update(unresolved_auxiliary_submissions=observations,ambiguous_submissions=[gpu_pending(0)])
+    submit.save(root/'campaign.json',value)
+    monkeypatch.setattr(collector,'remote_cli',lambda *a:{'stdout':line(note=observations[2]['note']),
+        'returncode':0,'ssh_returncode':0,'timed_out':False})
+    submit.recover(auxiliary=True)
+    result=json.loads((root/'campaign.json').read_text())
+    assert result['unresolved_auxiliary_submissions']==[row for i,row in enumerate(observations) if i!=2]
+    assert result['ambiguous_submissions']==[gpu_pending(0)]
+    assert len(result['auxiliary_jobs'])==1 and result['auxiliary_jobs'][0]['note']==observations[2]['note']
+
+
+def test_four_deferred_cpu_observations_still_block_cleanup(ledger,monkeypatch):
+    root,value=ledger
+    value.update(ambiguous_submissions=[],unresolved_auxiliary_submissions=[deferred_cpu(i) for i in range(4)])
+    submit.save(root/'campaign.json',value)
+    monkeypatch.setattr(submit.subprocess,'run',lambda *a,**k:pytest.fail('Unresolved CPU observations permitted cleanup'))
+    with pytest.raises(AssertionError,match='audited before cleanup'):submit.main(['cleanup'])
