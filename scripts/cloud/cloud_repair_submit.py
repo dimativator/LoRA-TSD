@@ -24,6 +24,49 @@ def cpu_inspection(record: dict) -> bool:
             and record["gpus"] == 0 and record.get("worker") is None)
 
 
+def gpu_intent(record: dict) -> bool:
+    return (record.get("mode") == "worker" and type(record.get("gpus")) is int
+            and record["gpus"] == 1 and type(record.get("worker")) is int
+            and record["worker"] in range(len(TASKS)))
+
+
+def reserved_gpu_slots(campaign: dict) -> int:
+    """Every unanswered GPU intent consumes its slot; none is a retry opportunity."""
+    pending = campaign.get("ambiguous_submissions", [])
+    if any(row.get("gpus") != 0 and not gpu_intent(row) for row in pending):
+        raise RuntimeError("Unclassified pending allocation must be resolved")
+    records = campaign["jobs"] + [row for row in pending if gpu_intent(row)]
+    workers = [row["worker"] for row in records]
+    assert all(type(worker) is int and worker in range(len(TASKS)) for worker in workers)
+    assert all(row.get("gpus", 1) == 1 for row in campaign["jobs"])
+    assert len(workers) == len(set(workers)), "Worker already has an explicit create intent"
+    ids = [row["job_id"] for row in campaign["jobs"]]
+    assert len(ids) == len(set(ids)), "Duplicate received GPU job ID"
+    assert len(records) <= len(TASKS), "Received jobs and unknown GPU intents exceed the eight tasks"
+    return len(campaign["jobs"]) + sum(max(1, len(set(row.get("observed_job_ids", []))))
+        for row in pending if gpu_intent(row))
+
+
+def remember_receipt(campaign: dict, pending: dict, output: str, proof: Path, partial: bool = False) -> set:
+    ids = set(re.findall(r"lm-mpi-job-[a-f0-9-]+", output))
+    if ids:
+        observed = ids | set(pending.get("observed_job_ids", []))
+        pending["observed_job_ids"] = sorted(observed)
+        known = {row["job_id"] for row in campaign["jobs"] + campaign["auxiliary_jobs"]}
+        known.update(job for row in campaign["ambiguous_submissions"] if row is not pending
+                     for job in row.get("observed_job_ids", []))
+        reason = "Multiple job IDs in submission response" if len(observed) > 1 else (
+            "Receipt job ID is already recorded or observed" if observed & known else None)
+        if reason:
+            pending["recovery_conflict"] = {"reason": reason, "observed_at": now(),
+                "evidence": str(proof), "evidence_sha256": digest(proof)}
+    if partial:
+        pending["partial_receipt"] = True
+    campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
+    save(ARTIFACTS / "campaign.json", campaign)
+    return ids
+
+
 def defer_inspection(campaign: dict) -> None:
     """Retain one uncertain CPU observation without blocking independent training."""
     pending = campaign.get("ambiguous_submissions", [])
@@ -48,46 +91,61 @@ def recover(auxiliary: bool = False) -> None:
         if not pending:
             print("No ambiguous repair submission")
             return
-        assert len(pending) == 1
-        intent = pending[0]
+        assert len({row["note"] for row in pending}) == len(pending), "Duplicate pending note"
+        reserved_gpu_slots(campaign)
         if auxiliary:
-            assert intent["mode"] == "inspect" and intent["gpus"] == 0 and intent["worker"] is None
-        if intent["mode"] == "worker":
-            assert intent["worker"] in range(len(TASKS)) and intent["gpus"] == 1
-            assert len(campaign["jobs"]) < len(TASKS)
-            assert not any(row["worker"] == intent["worker"] for row in campaign["jobs"])
-        else:
-            assert intent["gpus"] == 0
+            assert len(pending) == 1 and cpu_inspection(pending[0])
         from cloud_repair_collect import query_listings, listing_rows
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        prefix = "recovery-" + intent["intent"] + "-" + stamp
+        prefix = "recovery-" + ("auxiliary" if auxiliary else "pending") + "-" + stamp
         queries = query_listings(time.monotonic() + 110, ARTIFACTS, prefix)
         text = "\n".join(f"# query={row['source']} observed_at={row['observed_at']}\n{row['stdout']}" for row in queries)
         save_path = ARTIFACTS / (prefix + ".log")
         save_path.write_text(text)
         rows = listing_rows(queries)
-        matches = [row for row in rows if row["note"] == intent["note"]]
-        ids = {row["job_id"] for row in matches}
-        if len(ids) != 1:
-            raise RuntimeError("No unique scheduler match yet; keep intent pending")
-        job_id = next(iter(ids))
-        same_id = [row for row in rows if row["job_id"] == job_id]
-        if (any(not row["owned_entry"] or row["note"] != intent["note"] for row in same_id)
-                or len({row["status"].lower() for row in same_id}) != 1):
-            raise RuntimeError("Scheduler identity/status evidence conflicts; keep intent pending")
-        latest = max(matches, key=lambda row: row["observed_at"])
-        record = {**intent, "job_id": job_id, "scheduler_status": latest["status"],
-                  "scheduler_observed_at": latest["observed_at"], "adopted_at": now(),
-                  "unique_note_evidence": str(save_path), "absence_proof": False,
-                  "unique_note_evidence_sha256": digest(save_path),
-                  "listings_complete": all(row["complete"] for row in queries),
-                  "listing_queries": [{key: value for key, value in row.items() if key != "stdout"} for row in queries]}
-        collection = "jobs" if intent["mode"] == "worker" else "auxiliary_jobs"
-        assert not any(row["job_id"] == record["job_id"] for row in campaign[collection])
-        campaign[collection].append(record)
-        campaign[key] = []
-        save(ARTIFACTS / "campaign.json", campaign)
-        print(json.dumps(record, indent=2))
+        adopted, unresolved = [], []
+        for intent in list(pending):
+            matches = [row for row in rows if row["note"] == intent["note"]]
+            ids = {row["job_id"] for row in matches}
+            observed = ids | set(intent.get("observed_job_ids", []))
+            conflict = "Multiple job IDs share the pending note" if len(observed) > 1 else None
+            if not ids and not conflict:
+                unresolved.append({"note": intent["note"], "error": "No unique scheduler match yet; keep intent pending"})
+                continue
+            if not conflict and len(ids) != 1:
+                conflict = "No unique scheduler match yet"
+            job_id = next(iter(ids)) if ids else None
+            same_id = [row for row in rows if row["job_id"] == job_id]
+            if not conflict and (any(not row["owned_entry"] or row["note"] != intent["note"]
+                    or not isinstance(row["status"], str) for row in same_id)
+                    or len({row["status"].lower() for row in same_id}) != 1):
+                conflict = "Scheduler identity/status evidence conflicts"
+            if conflict:
+                intent.update(observed_job_ids=sorted(observed), recovery_conflict={"reason": conflict,
+                              "observed_at": now(), "evidence": str(save_path), "evidence_sha256": digest(save_path)})
+                campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
+                save(ARTIFACTS / "campaign.json", campaign)
+                unresolved.append({"note": intent["note"], "error": conflict + "; keep intent pending"})
+                continue
+            collection = "jobs" if intent["mode"] == "worker" else "auxiliary_jobs"
+            if any(row["job_id"] == job_id for row in campaign["jobs"] + campaign["auxiliary_jobs"]):
+                unresolved.append({"note": intent["note"], "error": "Job ID is already recorded; preserve intent for audit"})
+                continue
+            latest = max(matches, key=lambda row: row["observed_at"])
+            record = {**intent, "job_id": job_id, "scheduler_status": latest["status"],
+                      "scheduler_observed_at": latest["observed_at"], "adopted_at": now(),
+                      "unique_note_evidence": str(save_path), "absence_proof": False,
+                      "unique_note_evidence_sha256": digest(save_path),
+                      "listings_complete": all(row["complete"] for row in queries),
+                      "listing_queries": [{name: value for name, value in row.items() if name != "stdout"} for row in queries]}
+            campaign[collection].append(record)
+            campaign[key] = [row for row in campaign[key] if row["note"] != intent["note"]]
+            campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
+            save(ARTIFACTS / "campaign.json", campaign)
+            adopted.append(record)
+        print(json.dumps({"adopted": adopted, "unresolved": unresolved}, indent=2))
+        if not adopted and unresolved:
+            raise RuntimeError(unresolved[0]["error"])
 
 
 def main() -> None:
@@ -109,13 +167,18 @@ def main() -> None:
         deferred = campaign.get("unresolved_auxiliary_submissions", [])
         if len(deferred) > 1 or any(not cpu_inspection(row) for row in deferred):
             raise RuntimeError("Unresolved allocation must be proven CPU-only before proceeding")
-        if campaign.get("ambiguous_submissions"):
-            raise RuntimeError("Recover the unique pending submission note before creating another job")
+        pending = campaign.get("ambiguous_submissions", [])
+        reserved = reserved_gpu_slots(campaign)
+        if pending and (args.mode not in {"worker", "inspect"} or any(not gpu_intent(row) for row in pending)):
+            raise RuntimeError("Resolve CPU or state-changing pending submission before another create intent")
         if args.mode == "worker":
+            if any(row.get("recovery_conflict") for row in pending):
+                raise RuntimeError("Resolve observed pending allocation conflicts before another GPU create intent")
             assert campaign.get("review_passed") and campaign.get("assets_ready_verified")
             assert campaign.get("runtime_bundle_sha256")
             assert not any(row["worker"] == args.worker_id for row in campaign["jobs"])
-            assert len(campaign["jobs"]) < len(TASKS) <= campaign["gpu_limit"] == 10
+            assert not any(row["worker"] == args.worker_id for row in pending if gpu_intent(row))
+            assert reserved < len(TASKS) <= campaign["gpu_limit"] == 10
         if args.mode == "prepare":
             assert campaign.get("space_preflight_verified") is True
             assert campaign.get("preparation_guard_review_passed") is True
@@ -157,7 +220,8 @@ def main() -> None:
         pending = {"intent": intent, "note": note, "mode": args.mode, "worker": args.worker_id,
                    "created_at": now(), "source_revision": campaign["source_revision"],
                    "environment_names": sorted(environment), "gpus": 1 if args.mode == "worker" else 0}
-        campaign["ambiguous_submissions"] = [pending]
+        campaign.setdefault("ambiguous_submissions", []).append(pending)
+        campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
         save(ARTIFACTS / "campaign.json", campaign)
         remote = "import subprocess,json\ncommand=" + repr(command) + "\n"
         remote += "d=subprocess.run(command+['--dry-run'],capture_output=True,text=True,timeout=50)\n"
@@ -170,20 +234,32 @@ def main() -> None:
         try:
             result = subprocess.run(SSH + ["python3", "-"], input=remote,
                                     capture_output=True, text=True, timeout=305)
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as error:
+            output = "".join(value.decode(errors="replace") if isinstance(value, bytes) else (value or "")
+                             for value in (error.output, error.stderr))
+            for secret in secrets:
+                output = output.replace(secret, "<redacted>")
+            proof = ARTIFACTS / ("submission-" + intent + ".log")
+            proof.write_text(output)
+            remember_receipt(campaign, pending, output, proof, partial=True)
             raise RuntimeError("Submission response lost; adopt exact unique note, never retry blindly") from None
         output = result.stdout + result.stderr
         for secret in secrets:
             output = output.replace(secret, "<redacted>")
-        (ARTIFACTS / ("submission-" + intent + ".log")).write_text(output)
-        ids = set(re.findall(r"lm-mpi-job-[a-f0-9-]+", output))
+        proof = ARTIFACTS / ("submission-" + intent + ".log")
+        proof.write_text(output)
+        ids = remember_receipt(campaign, pending, output, proof)
         if len(ids) != 1:
             raise RuntimeError("No unique submission ID; recover exact note from scheduler")
-        record = {**pending, "job_id": ids.pop(), "transport_returncode": result.returncode,
+        job_id = ids.pop()
+        if pending.get("recovery_conflict"):
+            raise RuntimeError("Receipt identity conflicts with an existing job; preserve pending intent")
+        record = {**pending, "job_id": job_id, "transport_returncode": result.returncode,
                   "submitted_at": now()}
-        campaign["ambiguous_submissions"] = []
+        campaign["ambiguous_submissions"] = [row for row in campaign["ambiguous_submissions"] if row["note"] != note]
         collection = "jobs" if args.mode == "worker" else "auxiliary_jobs"
         campaign[collection].append(record)
+        campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
         save(ARTIFACTS / "campaign.json", campaign)
         print(json.dumps(record, indent=2))
 

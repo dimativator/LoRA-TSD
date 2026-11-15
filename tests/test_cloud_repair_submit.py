@@ -240,3 +240,203 @@ def test_refresh_is_one_distinct_cpu_request_with_old_intent_retained(ledger, mo
     assert not current["ambiguous_submissions"] and not current["jobs"]
     assert current["unresolved_auxiliary_submissions"][0]["note"] == NOTE
     assert current["auxiliary_jobs"][0]["job_id"] == SECOND
+
+
+def gpu_pending(worker):
+    return {"intent": f"worker-{worker}", "note": f"repair8b_worker-{worker}_unique",
+            "mode": "worker", "worker": worker, "gpus": 1}
+
+
+def ready(value):
+    value.update(source_revision="reviewed-dev", review_passed=True, assets_ready_verified=True,
+                 runtime_bundle_sha256="a" * 64, gpu_limit=10)
+
+
+def mock_create(monkeypatch, root, mode, worker=None, job=SECOND, timeout=False):
+    monkeypatch.setattr(sys, "argv", ["submit", mode] + (["--worker-id", str(worker)] if worker is not None else []))
+    monkeypatch.setattr(submit.netrc, "netrc", lambda: SimpleNamespace(
+        authenticators=lambda host: ("api", None, "test-key-not-real")))
+    calls = []
+    def create(*args, **kwargs):
+        calls.append(1)
+        current = json.loads((root / "campaign.json").read_text())
+        assert len({r["note"] for r in current["ambiguous_submissions"]}) == len(current["ambiguous_submissions"])
+        if timeout:
+            raise submit.subprocess.TimeoutExpired("ssh", 305)
+        return SimpleNamespace(returncode=0, stdout=job, stderr="")
+    monkeypatch.setattr(submit.subprocess, "run", create)
+    return calls
+
+
+def test_first_distinct_worker_is_allowed_while_unknown_worker_still_reserves_slot(ledger, monkeypatch):
+    root, value = ledger
+    ready(value)
+    original = gpu_pending(0)
+    value["ambiguous_submissions"] = [original]
+    submit.save(root / "campaign.json", value)
+    calls = mock_create(monkeypatch, root, "worker", 7)
+    submit.main()
+    current = json.loads((root / "campaign.json").read_text())
+    assert len(calls) == 1 and current["ambiguous_submissions"] == [original]
+    assert current["jobs"][0]["worker"] == 7 and current["reserved_gpu_slots"] == 2
+
+
+def test_same_pending_worker_can_never_be_created_twice(ledger, monkeypatch):
+    root, value = ledger
+    ready(value)
+    value["ambiguous_submissions"] = [gpu_pending(0)]
+    submit.save(root / "campaign.json", value)
+    calls = mock_create(monkeypatch, root, "worker", 0)
+    with pytest.raises(AssertionError): submit.main()
+    assert not calls
+
+
+def test_all_eight_received_or_unknown_intents_consume_first_create_budget(ledger, monkeypatch):
+    root, value = ledger
+    ready(value)
+    value["jobs"] = [{**gpu_pending(worker), "job_id": f"lm-mpi-job-0000000{worker}"} for worker in range(4)]
+    value["ambiguous_submissions"] = [gpu_pending(worker) for worker in range(4, 8)]
+    assert submit.reserved_gpu_slots(value) == 8
+    submit.save(root / "campaign.json", value)
+    calls = mock_create(monkeypatch, root, "worker", 7)
+    with pytest.raises(AssertionError): submit.main()
+    assert not calls
+
+
+def test_one_normal_cpu_inspection_appends_without_erasing_gpu_ambiguity(ledger, monkeypatch):
+    root, value = ledger
+    ready(value)
+    original = gpu_pending(0)
+    value["ambiguous_submissions"] = [original]
+    submit.save(root / "campaign.json", value)
+    calls = mock_create(monkeypatch, root, "inspect", timeout=True)
+    with pytest.raises(RuntimeError, match="response lost"): submit.main()
+    current = json.loads((root / "campaign.json").read_text())
+    assert len(current["ambiguous_submissions"]) == 2 and original in current["ambiguous_submissions"]
+    assert sum(submit.cpu_inspection(row) for row in current["ambiguous_submissions"]) == 1
+    assert current["reserved_gpu_slots"] == 1
+    with pytest.raises(RuntimeError, match="pending submission"): submit.main()
+    assert len(calls) == 1
+    mock_create(monkeypatch, root, "worker", 7)
+    with pytest.raises(RuntimeError, match="pending submission"): submit.main()
+
+
+def test_successful_cpu_adoption_only_removes_its_own_pending_note(ledger, monkeypatch):
+    root, value = ledger
+    ready(value)
+    original = gpu_pending(0)
+    value["ambiguous_submissions"] = [original]
+    submit.save(root / "campaign.json", value)
+    mock_create(monkeypatch, root, "inspect")
+    submit.main()
+    current = json.loads((root / "campaign.json").read_text())
+    assert current["ambiguous_submissions"] == [original]
+    assert len(current["auxiliary_jobs"]) == 1 and current["reserved_gpu_slots"] == 1
+
+
+def test_multiple_missing_gpu_intents_survive_next_distinct_timeout(ledger, monkeypatch):
+    root, value = ledger
+    ready(value)
+    originals = [gpu_pending(0), gpu_pending(7)]
+    value["ambiguous_submissions"] = originals
+    submit.save(root / "campaign.json", value)
+    mock_create(monkeypatch, root, "worker", 1, timeout=True)
+    with pytest.raises(RuntimeError, match="response lost"): submit.main()
+    current = json.loads((root / "campaign.json").read_text())
+    assert all(row in current["ambiguous_submissions"] for row in originals)
+    assert {row["worker"] for row in current["ambiguous_submissions"]} == {0, 7, 1}
+    assert current["reserved_gpu_slots"] == 3
+
+
+def test_multi_recovery_adopts_only_positive_notes_and_keeps_missing_others(ledger, monkeypatch):
+    root, value = ledger
+    pending = [gpu_pending(0), gpu_pending(7), gpu_pending(1)]
+    value["ambiguous_submissions"] = pending
+    submit.save(root / "campaign.json", value)
+    calls = []
+    def query(command, *args):
+        calls.append(command)
+        raw = line(job=JOB, note=pending[1]["note"])
+        return {"stdout": raw, "returncode": 0, "ssh_returncode": 0, "timed_out": False, "ssh_timed_out": False}
+    monkeypatch.setattr(collector, "remote_cli", query)
+    submit.recover()
+    current = json.loads((root / "campaign.json").read_text())
+    assert current["ambiguous_submissions"] == [pending[0], pending[2]]
+    assert current["jobs"][0]["worker"] == 7 and current["reserved_gpu_slots"] == 3
+    assert calls == [["mlsub", "list"], ["mlsub", "list", "--active"]]
+
+
+def test_observed_multiple_job_ids_persist_conflict_and_block_new_gpu(ledger, monkeypatch):
+    root, value = ledger
+    ready(value)
+    value["ambiguous_submissions"] = [gpu_pending(0)]
+    submit.save(root / "campaign.json", value)
+    def query(command, *args):
+        raw = line(job=SECOND if command[-1] == "--active" else JOB,
+                   note=value["ambiguous_submissions"][0]["note"])
+        return {"stdout": raw, "returncode": 0, "ssh_returncode": 0, "timed_out": False, "ssh_timed_out": False}
+    monkeypatch.setattr(collector, "remote_cli", query)
+    with pytest.raises(RuntimeError, match="Multiple job IDs"): submit.recover()
+    current = json.loads((root / "campaign.json").read_text())
+    intent = current["ambiguous_submissions"][0]
+    assert intent["observed_job_ids"] == sorted([JOB, SECOND]) and intent["recovery_conflict"]
+    assert current["reserved_gpu_slots"] == 2 and not current["jobs"]
+    calls = mock_create(monkeypatch, root, "worker", 7)
+    with pytest.raises(RuntimeError, match="conflicts"): submit.main()
+    assert not calls
+    # A later missing row never erases the already observed second allocation.
+    monkeypatch.setattr(collector, "remote_cli", lambda *a: {
+        "stdout": line(note=intent["note"]), "returncode": 0, "ssh_returncode": 0,
+        "timed_out": False, "ssh_timed_out": False})
+    with pytest.raises(RuntimeError, match="Multiple job IDs"): submit.recover()
+    assert len(json.loads((root / "campaign.json").read_text())["ambiguous_submissions"][0]["observed_job_ids"]) == 2
+
+
+def test_multiple_receipt_ids_persist_before_error_and_stop_more_gpu_creates(ledger, monkeypatch):
+    root, value = ledger
+    ready(value)
+    value["ambiguous_submissions"] = []
+    submit.save(root / "campaign.json", value)
+    mock_create(monkeypatch, root, "worker", 0, job=JOB + " " + SECOND)
+    with pytest.raises(RuntimeError, match="unique submission ID"): submit.main()
+    current = json.loads((root / "campaign.json").read_text())
+    assert current["ambiguous_submissions"][0]["observed_job_ids"] == sorted([JOB, SECOND])
+    assert current["ambiguous_submissions"][0]["recovery_conflict"] and current["reserved_gpu_slots"] == 2
+    calls = mock_create(monkeypatch, root, "worker", 7)
+    with pytest.raises(RuntimeError, match="conflicts"): submit.main()
+    assert not calls
+
+
+def test_receipt_cannot_append_an_already_received_job_id(ledger, monkeypatch):
+    root, value = ledger
+    ready(value)
+    value["jobs"] = [{**gpu_pending(0), "job_id": JOB}]
+    value["ambiguous_submissions"] = []
+    submit.save(root / "campaign.json", value)
+    mock_create(monkeypatch, root, "worker", 7, job=JOB)
+    with pytest.raises(RuntimeError, match="Receipt identity conflicts"): submit.main()
+    current = json.loads((root / "campaign.json").read_text())
+    assert len(current["jobs"]) == 1 and current["jobs"][0]["worker"] == 0
+    assert current["ambiguous_submissions"][0]["worker"] == 7
+    assert current["ambiguous_submissions"][0]["recovery_conflict"]
+
+
+@pytest.mark.parametrize("multiple", [False, True])
+def test_partial_timeout_ids_are_recorded_and_redacted_without_adoption(ledger, monkeypatch, multiple):
+    root, value = ledger
+    ready(value)
+    value["ambiguous_submissions"] = []
+    submit.save(root / "campaign.json", value)
+    mock_create(monkeypatch, root, "worker", 0)
+    def timeout(*args, **kwargs):
+        raw = (JOB + (" " + SECOND if multiple else "") + " test-key-not-real").encode()
+        raise submit.subprocess.TimeoutExpired("ssh", 305, output=raw, stderr=b"partial transport")
+    monkeypatch.setattr(submit.subprocess, "run", timeout)
+    with pytest.raises(RuntimeError, match="response lost"): submit.main()
+    current = json.loads((root / "campaign.json").read_text())
+    pending = current["ambiguous_submissions"][0]
+    assert pending["partial_receipt"] and not current["jobs"]
+    assert len(pending["observed_job_ids"]) == (2 if multiple else 1)
+    assert current["reserved_gpu_slots"] == (2 if multiple else 1)
+    assert bool(pending.get("recovery_conflict")) is multiple
+    assert "test-key-not-real" not in (root / "submission-worker-0.log").read_text()
