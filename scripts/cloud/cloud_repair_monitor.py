@@ -355,10 +355,12 @@ def monitor(api, campaign: dict, artifacts: Path, api_key: str, verify: bool = F
                 require(all(math.isfinite(row["validation_score"]) for row in evaluations), "Nonfinite active validation")
                 step = summary.get("optimizer_step", 0)
                 phase = status.get("phase") if status else None
-                if phase in (None, "claimed"):
+                if phase in (None, "claimed", "reserved"):
                     phase = "profiling" if entry["microbatch"] is None else ("initializing" if step == 0 else "training")
                     if (step > 0 and step % 250 == 249) or (step == 3000 and len(evaluations) < 12):
                         phase = "validation"
+                if step == 3000 and len(evaluations) < 12:
+                    phase = "validation"
                 entry.update(step=step, phase=phase, evaluation_count=len(evaluations), created_at=run.created_at)
                 if evaluations:
                     best = max(evaluations, key=lambda row: row["validation_score"])

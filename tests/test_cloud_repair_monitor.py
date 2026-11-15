@@ -200,10 +200,15 @@ def test_interrupted_attempt_is_historical_and_not_credited(evidence):
     assert result["interrupted_attempts"][0]["id"] == evidence.run.id
 
 
-def test_final_evaluation_pending_is_active_validation(evidence):
+@pytest.mark.parametrize("shared_phase", [None, "training", "reserved"])
+def test_final_evaluation_pending_is_active_validation(evidence, shared_phase):
     evidence.run.state = "running"
     evidence.run.summary["verified"] = False
     evidence.rows.pop()
+    if shared_phase is not None:
+        monitor.save(evidence.artifacts / "inspection-latest.json",
+                     {"campaign": monitor.CAMPAIGN,
+                      "tasks": [{**evidence.status, "phase": shared_phase, "step": 1500}]})
     api = SimpleNamespace(runs=lambda *args, **kwargs: [evidence.run])
     result = monitor.monitor(api, evidence.campaign, evidence.artifacts, "key", True)
     assert result["verified_completed"] == 0 and result["phase_counts"]["validation"] == 1
