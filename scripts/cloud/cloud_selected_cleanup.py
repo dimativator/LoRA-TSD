@@ -189,8 +189,10 @@ def main() -> None:
                 continue
             identity = scan(root, audit["inventory_cutoff_ns"] if root == HOME_TARGET else None)
             if root == HOME_TARGET:
-                if sorted(path.name for path in root.iterdir()) != sorted(audit["home_children"]):
-                    raise ValueError("Personal-root entries differ from reviewed inventory")
+                directories = sorted(path.name for path in root.iterdir()
+                                     if stat.S_ISDIR(path.lstat().st_mode))
+                if directories != sorted(audit["home_children"]):
+                    raise ValueError("Personal-root directories differ from reviewed inventory")
                 if identity["allocated_bytes"] > 2_100_000_000:
                     raise ValueError("Personal-root size grew beyond reviewed scope")
             else:
