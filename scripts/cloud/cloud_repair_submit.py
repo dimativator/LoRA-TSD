@@ -83,7 +83,7 @@ def main() -> None:
                        "WANDB_BASE_URL": "https://wandb-radfan.ru", "WANDB_ENTITY": "andrey",
                        "WANDB_PROJECT": "LoRA-Muon"}
         secrets = []
-        if args.mode in {"prepare", "worker"}:
+        if args.mode in {"prepare", "worker", "inspect"}:
             key = netrc.netrc().authenticators("wandb-radfan.ru")[2]
             environment["WANDB_API_KEY"] = key
             secrets.append(key)
@@ -103,6 +103,8 @@ def main() -> None:
         number = len(campaign["jobs"]) + len(campaign["auxiliary_jobs"])
         intent = f"{args.mode}-{args.worker_id if args.worker_id is not None else number}"
         note = "repair8b_" + intent + "_" + now().replace(":", "").replace("+", "_").replace(".", "_")
+        if args.mode == "inspect":
+            environment.update(REPAIR_INSPECT_UPLOAD="1", REPAIR_CONTROL_NOTE=note)
         arguments = args.mode + (f" --worker-id {args.worker_id}" if args.mode == "worker" else "")
         command = ["mlsub", "run", "--repo", "https://github.com/dimativator/LoRA-TSD", "--branch", "dev",
                    "--entry", "scripts/cloud/cloud_repair_entry.py", "--args", arguments,

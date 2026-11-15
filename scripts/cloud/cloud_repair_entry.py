@@ -44,6 +44,9 @@ def inspect(preflight: bool = False) -> None:
         result["cleanup"] = json.loads(cleanup.read_text()) if cleanup.exists() else None
     for line in snapshot_lines(result):
         print(line, flush=True)
+    if not preflight and os.environ.get("REPAIR_INSPECT_UPLOAD") == "1":
+        from cloud_repair_control import upload_snapshot
+        upload_snapshot(result)
 
 
 def main() -> None:
