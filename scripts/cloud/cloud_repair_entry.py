@@ -16,7 +16,9 @@ from cloud_repair_common import (ASSETS, CAMPAIGN, PYTHON, STATE, TASKS,
 def inspect(preflight: bool = False) -> None:
     records = disk_records(affected_paths())
     result = {"campaign": CAMPAIGN, "timestamp": now(), "filesystems": records,
-              "assets_ready": (ASSETS / "ready.json").exists(), "target_runs": len(TASKS)}
+              "assets_ready": (ASSETS / "ready.json").exists(),
+              "assets_exist": ASSETS.exists() or ASSETS.is_symlink(),
+              "assets_root": str(ASSETS), "target_runs": len(TASKS)}
     try:
         result["nfs2_read_only"] = disk_records([Path("/home/jovyan/shares/SR006.nfs2")])
     except OSError as error:
@@ -46,6 +48,10 @@ def inspect(preflight: bool = False) -> None:
         result["preparation"] = json.loads(preparation.read_text()) if preparation.exists() else None
         cleanup = STATE / "cleanup.json"
         result["cleanup"] = json.loads(cleanup.read_text()) if cleanup.exists() else None
+        closure = STATE / "campaign-closed.json"
+        if closure.exists() or closure.is_symlink():
+            from cloud_repair_closure import validate_closure
+            result["campaign_closure"] = validate_closure()
     for line in snapshot_lines(result):
         print(line, flush=True)
     if not preflight and os.environ.get("REPAIR_INSPECT_UPLOAD") == "1":
@@ -60,6 +66,9 @@ def main() -> None:
     parser.add_argument("--task", type=Path)
     parser.add_argument("--microbatch", type=int)
     args = parser.parse_args()
+    if args.mode in {"worker", "profile"}:
+        from cloud_repair_closure import assert_campaign_open
+        assert_campaign_open()
     if args.mode == "worker" and Path(sys.prefix).resolve() != PYTHON.parent.parent.resolve():
         os.execv(str(PYTHON), [str(PYTHON), str(Path(__file__).resolve()), *sys.argv[1:]])
     if args.mode in {"preflight", "inspect"}:

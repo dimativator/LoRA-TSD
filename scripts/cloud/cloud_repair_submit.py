@@ -228,6 +228,41 @@ def deferred_inspections(campaign: dict) -> list:
     return records
 
 
+def final_authorization(campaign: dict) -> dict:
+    path = ARTIFACTS / "cleanup-authorization.json"
+    if not path.is_file():
+        assert not campaign.get("superseded_unreceived_gpu_intents"), "Superseded unanswered GPU requests require final audit"
+        assert not campaign.get("unresolved_auxiliary_submissions"), "Deferred CPU inspection must be audited before cleanup"
+    assert path.is_file() and not path.is_symlink(), "Missing canonical final authorization"
+    confirmation = json.loads(path.read_text())
+    assert confirmation["verified_runs"] == len(TASKS)
+    if confirmation.get("asset_isolation_only") is not True:
+        assert not campaign.get("superseded_unreceived_gpu_intents"), "Superseded unanswered GPU requests require final audit"
+        assert not campaign.get("unresolved_auxiliary_submissions"), "Deferred CPU inspection must be audited before cleanup"
+        return confirmation
+    from cloud_repair_cleanup import proof, sha
+    from cloud_repair_isolation import unknown_ledger
+    from cloud_repair_collect import owned_records
+    proof(confirmation)
+    isolated = confirmation["asset_isolation_request"]["proof"]
+    assert isolated["source_gate_proof"]["current_revision"] == campaign["source_revision"], "Published source changed after isolation review"
+    unknown = unknown_ledger(campaign, ARTIFACTS)
+    assert unknown["canonical_unknown_ledger"] == isolated["allocation_proof"]["canonical_unknown_ledger"], "Retained unanswered requests changed after review"
+    known = {row["job_id"]: row for row in isolated["allocation_proof"]["known_terminal"]}
+    current = owned_records(campaign)
+    assert set(known) <= {row["job_id"] for row in current}, "Reviewed owned allocation disappeared"
+    for row in current:
+        if row["job_id"] in known:
+            assert all(row.get(key) == known[row["job_id"]].get(key)
+                       for key in ("note", "mode", "worker", "gpus")), "Known allocation identity changed after review"
+        else:
+            assert row.get("source_revision") == campaign["source_revision"], "Post-review allocation uses unreviewed source"
+            assert cpu_inspection(row) or (row.get("mode") in {"reconcile", "cleanup"}
+                and type(row.get("gpus")) is int and row["gpus"] == 0 and row.get("worker") is None
+                and row.get("final_authorization_sha256") == sha(confirmation)), "Unexpected post-review allocation"
+    return confirmation
+
+
 def defer_inspection(campaign: dict) -> None:
     """Retain at most four uncertain read-only CPU observations without losing evidence."""
     pending = campaign.get("ambiguous_submissions", [])
@@ -368,11 +403,8 @@ def main(argv: list | None = None) -> None:
         if args.mode == "worker":
             environment["PAPER8B_REPAIR_BUNDLE_SHA256"] = campaign["runtime_bundle_sha256"]
         if args.mode in {"cleanup", "reconcile"}:
-            assert not campaign.get("superseded_unreceived_gpu_intents"), "Superseded unanswered GPU requests require final audit"
             assert not any(row.get("recovery_conflict") for row in campaign["jobs"] + campaign["auxiliary_jobs"]), "Received allocation conflict remains"
-            assert not campaign.get("unresolved_auxiliary_submissions"), "Deferred CPU inspection must be audited before cleanup"
-            confirmation = json.loads((ARTIFACTS / "cleanup-authorization.json").read_text())
-            assert confirmation["verified_runs"] == len(TASKS)
+            confirmation = final_authorization(campaign)
             environment.update(encode_audit_environment("REPAIR_FINAL_AUDIT", confirmation))
         number = len(campaign["jobs"]) + len(campaign["auxiliary_jobs"]) + len(campaign.get("unresolved_auxiliary_submissions", []))
         intent = f"{args.mode}-{args.worker_id if args.worker_id is not None else number}"
@@ -390,6 +422,9 @@ def main(argv: list | None = None) -> None:
                    "created_at": now(), "source_revision": campaign["source_revision"],
                    "environment_names": sorted(environment), "gpus": 1 if args.mode == "worker" else 0,
                    **replacement}
+        if args.mode in {"cleanup", "reconcile"}:
+            from cloud_repair_cleanup import sha
+            pending["final_authorization_sha256"] = sha(confirmation)
         campaign.setdefault("ambiguous_submissions", []).append(pending)
         campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
         save(ARTIFACTS / "campaign.json", campaign)

@@ -48,6 +48,8 @@ def test_task_outside_authorized_eight_is_rejected(frozen):
 
 
 def test_duplicate_claim_fails_before_gpu_discovery(tmp_path, monkeypatch):
+    import cloud_repair_closure as closure
+    monkeypatch.setattr(closure, "STATE", tmp_path)
     monkeypatch.setattr(runtime, "STATE", tmp_path)
     monkeypatch.setattr(runtime, "require_space", lambda *args: [])
     path = tmp_path / "tasks" / (runtime.task_key(runtime.TASKS[0]) + ".json")
@@ -59,6 +61,8 @@ def test_duplicate_claim_fails_before_gpu_discovery(tmp_path, monkeypatch):
 
 
 def test_duplicate_worker_lock_is_nonblocking(tmp_path, monkeypatch):
+    import cloud_repair_closure as closure
+    monkeypatch.setattr(closure, "STATE", tmp_path)
     monkeypatch.setattr(runtime, "STATE", tmp_path)
     monkeypatch.setattr(runtime, "require_space", lambda *args: [])
     (tmp_path / "workers").mkdir()
@@ -66,6 +70,30 @@ def test_duplicate_worker_lock_is_nonblocking(tmp_path, monkeypatch):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(BlockingIOError):
             runtime.worker(0)
+
+
+@pytest.mark.parametrize("mode", ["worker", "profile"])
+def test_permanent_closure_blocks_runtime_before_assets_or_cuda(tmp_path, monkeypatch, mode):
+    import cloud_repair_closure as closure
+    monkeypatch.setattr(closure, "STATE", tmp_path)
+    (tmp_path / "campaign-closed.json").write_text("{}")
+    monkeypatch.setattr(runtime, "require_space", lambda *args: pytest.fail("Closed task reached asset metadata"))
+    monkeypatch.setattr(runtime, "single_gpu", lambda: pytest.fail("Closed task reached GPU query"))
+    monkeypatch.setattr(runtime, "unpack", lambda: pytest.fail("Closed task read runtime bundle"))
+    with pytest.raises(ValueError, match="closure marker"):
+        runtime.worker(0) if mode == "worker" else runtime.profile_main(SimpleNamespace())
+
+
+@pytest.mark.parametrize("mode", ["worker", "profile"])
+def test_permanent_closure_blocks_entry_before_worker_reexec(tmp_path, monkeypatch, mode):
+    import cloud_repair_closure as closure
+    import cloud_repair_entry as entry
+    monkeypatch.setattr(closure, "STATE", tmp_path)
+    (tmp_path / "campaign-closed.json").write_text("{}")
+    monkeypatch.setattr(sys, "argv", ["entry", mode, "--worker-id", "0"])
+    monkeypatch.setattr(entry.os, "execv", lambda *args: pytest.fail("Closed entry re-executed worker"))
+    with pytest.raises(ValueError, match="closure marker"):
+        entry.main()
 
 
 def test_paired_mpi_is_rejected_before_query(monkeypatch):

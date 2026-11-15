@@ -251,7 +251,8 @@ def plot_curves(path: Path, curves: list[dict]) -> None:
     plt.close(figure)
 
 
-def finalize(artifacts: Path = ARTIFACTS, original: Path = ORIGINAL) -> dict:
+def finalize(artifacts: Path = ARTIFACTS, original: Path = ORIGINAL,
+             source_review: Path | None = None, closure_review: Path | None = None) -> dict:
     campaign = read(artifacts / "campaign.json")
     require(campaign.get("campaign") == CAMPAIGN and campaign.get("tasks") == TASKS
             and campaign.get("target_runs") == 8 and bool(SHA256.fullmatch(campaign.get("runtime_bundle_sha256", ""))),
@@ -267,7 +268,13 @@ def finalize(artifacts: Path = ARTIFACTS, original: Path = ORIGINAL) -> dict:
     curves = old_curves + curves
     inspection, scheduler = read(artifacts / "inspection-latest.json"), read(artifacts / "scheduler-snapshot.json")
     manifests = verify_inspection(inspection, verified, campaign, artifacts)
-    terminal = verify_scheduler(campaign, scheduler, inspection, artifacts)
+    if source_review is None:
+        require(closure_review is None, "Closure review requires the exact source-gate review")
+        terminal = verify_scheduler(campaign, scheduler, inspection, artifacts)
+    else:
+        from cloud_repair_isolation import unknown_ledger, verify_source_review
+        verify_source_review(source_review, artifacts, campaign, unknown_ledger(campaign, artifacts))
+        terminal = []
     paired = []
     for row in repaired:
         old = originals[task_key(row)]
@@ -293,13 +300,32 @@ def finalize(artifacts: Path = ARTIFACTS, original: Path = ORIGINAL) -> dict:
                 for name, row in exported.items()), "Final export integrity check failed")
     # Recheck freshness after local hashing and plotting before issuing authority.
     verify_inspection(inspection, verified, campaign, artifacts)
-    verify_scheduler(campaign, scheduler, inspection, artifacts)
-    authorization = {"campaign": CAMPAIGN, "verified_runs": 8, "all_owned_jobs_terminal": True,
+    isolation_request = None
+    if source_review is None:
+        verify_scheduler(campaign, scheduler, inspection, artifacts)
+    else:
+        from cloud_repair_isolation import build_proof, closure_request
+        from cloud_repair_closure import reviewed_proof
+        proof = build_proof(artifacts, source_review)
+        proof_path = artifacts / "asset-isolation-proof.json"
+        save(proof_path, proof)
+        if closure_review is None:
+            return {"campaign": CAMPAIGN, "authorization_created": False,
+                    "closure_review_required": True, "proof_file": str(proof_path),
+                    "export_manifest_sha256": digest(output / "artifact-manifest.json")}
+        isolation_request = closure_request(proof, read(closure_review))
+        reviewed_proof(isolation_request)
+        terminal = proof["allocation_proof"]["known_allocation_ids"]
+    authorization = {"campaign": CAMPAIGN, "verified_runs": 8,
+                     "all_owned_jobs_terminal": isolation_request is None,
                      "all_diagnostics_independently_verified": True, "exports_verified": True,
                      "diagnostic_manifests": manifests, "runtime_bundle_sha256": campaign["runtime_bundle_sha256"],
                      "owned_terminal_jobs": terminal, "independent_verification_sha256": digest(verification_path),
                      "original_verification_sha256": digest(original / "wandb-independent-verification.json"),
                      "export_manifest_sha256": digest(output / "artifact-manifest.json")}
+    if isolation_request is not None:
+        authorization.update(asset_isolation_only=True, all_known_jobs_terminal=True,
+                             asset_isolation_request=isolation_request)
     authorization_path = artifacts / "cleanup-authorization.json"
     if authorization_path.exists():
         existing = read(authorization_path)
@@ -312,9 +338,13 @@ def finalize(artifacts: Path = ARTIFACTS, original: Path = ORIGINAL) -> dict:
 
 
 def main() -> None:
-    argparse.ArgumentParser(description=__doc__).parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-gate-review", type=Path)
+    parser.add_argument("--closure-review", type=Path)
+    args = parser.parse_args()
     with locked(ARTIFACTS / "submission.lock"):
-        print(json.dumps(finalize(), indent=2))
+        print(json.dumps(finalize(source_review=args.source_gate_review,
+                                  closure_review=args.closure_review), indent=2))
 
 
 if __name__ == "__main__":

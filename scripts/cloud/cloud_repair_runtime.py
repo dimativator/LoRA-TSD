@@ -254,6 +254,8 @@ def watch(process, directory: Path, status: dict, status_path: Path, run=None) -
 
 
 def profile_main(args) -> None:
+    from cloud_repair_closure import assert_campaign_open
+    assert_campaign_open()
     frozen = unpack()
     materialized = json.loads(args.task.read_text())
     task = TASKS[args.worker_id]
@@ -391,6 +393,8 @@ def run_task(task: dict, worker_id: int, frozen: Path, scratch: Path, env: dict,
 def worker(worker_id: int) -> None:
     if worker_id not in range(len(TASKS)):
         raise ValueError("Worker outside the eight authorized reruns")
+    from cloud_repair_closure import assert_campaign_open
+    assert_campaign_open()
     require_space(affected_paths(), {STATE: 1_000_000})
     task = TASKS[worker_id]
     worker_path = STATE / "workers" / f"{worker_id}.json"

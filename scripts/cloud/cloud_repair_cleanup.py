@@ -77,8 +77,27 @@ def proof(confirmation: dict) -> str:
     require(confirmation.get("campaign") == CAMPAIGN
             and type(confirmation.get("verified_runs")) is int
             and confirmation["verified_runs"] == len(TASKS), "Missing eight verified results")
-    for name in ("all_owned_jobs_terminal", "all_diagnostics_independently_verified", "exports_verified"):
+    for name in ("all_diagnostics_independently_verified", "exports_verified"):
         require(confirmation.get(name) is True, "Missing final attestation: " + name)
+    if confirmation.get("asset_isolation_only") is True:
+        from cloud_repair_closure import reviewed_proof
+        closure = reviewed_proof(confirmation.get("asset_isolation_request"))
+        require(confirmation.get("all_owned_jobs_terminal") is False
+                and confirmation.get("all_known_jobs_terminal") is True,
+                "Unknown allocation status must remain explicit")
+        require(confirmation.get("runtime_bundle_sha256") == closure["runtime_bundle_sha256"]
+                and confirmation.get("export_manifest_sha256") == closure["exports"]["manifest_sha256"]
+                and confirmation.get("owned_terminal_jobs") == closure["allocation_proof"]["known_allocation_ids"],
+                "Asset isolation export/runtime/allocation binding differs")
+        expected = {key: row["diagnostic_manifest_sha256"]
+                    for key, row in closure["scientific_verification"].items()}
+        require(confirmation.get("diagnostic_manifests") == expected
+                and all(row["independent_verification_sha256"] == confirmation.get("independent_verification_sha256")
+                        for row in closure["scientific_verification"].values()),
+                "Asset isolation independent diagnostic binding differs")
+    else:
+        require(confirmation.get("all_owned_jobs_terminal") is True,
+                "Missing final attestation: all_owned_jobs_terminal")
     records = confirmation.get("diagnostic_manifests", {})
     require(set(records) == {task_key(task) for task in TASKS}, "Incomplete diagnostic attestations")
     require(all(isinstance(value, str) and len(value) == 64
@@ -234,6 +253,9 @@ def reconcile(confirmation: dict) -> dict:
     confirmation_sha = proof(confirmation)
     with locked(STATE / "cleanup.lock"):
         namespace()
+        if confirmation.get("asset_isolation_only") is True:
+            from cloud_repair_closure import close_campaign
+            close_campaign(confirmation["asset_isolation_request"])
         records = completed_records(confirmation)
         before = require_space(affected_paths(), {STATE: 1_000_000})
         pending, verified = STATE / "pending-wandb-sync", STATE / "verified-raw-logs"
@@ -275,6 +297,9 @@ def cleanup(confirmation: dict) -> dict:
     confirmation_sha = proof(confirmation)
     with locked(STATE / "cleanup.lock"):
         namespace()
+        if confirmation.get("asset_isolation_only") is True:
+            from cloud_repair_closure import validate_closure
+            validate_closure(confirmation["asset_isolation_request"])
         records = completed_records(confirmation)
         require(all(status.get("syncphase") == "independently_verified" for pair in records for status in pair),
                 "Independent diagnostic reconciliation is incomplete")
