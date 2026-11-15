@@ -141,6 +141,7 @@ def verify_scheduler(campaign: dict, scheduler: dict, inspection: dict, artifact
     require(scheduler.get("campaign") == CAMPAIGN, "Scheduler belongs to another campaign")
     fresh(scheduler["timestamp"])
     require(not campaign.get("ambiguous_submissions"), "Submission ambiguity remains")
+    require(not campaign.get("superseded_unreceived_gpu_intents"), "Superseded unanswered GPU requests require final audit")
     require(not any(row.get("recovery_conflict") for row in campaign.get("jobs", [])
                     + campaign.get("auxiliary_jobs", [])), "Received allocation conflict remains")
     require(not campaign.get("unresolved_auxiliary_submissions"), "Deferred CPU observation remains unresolved")

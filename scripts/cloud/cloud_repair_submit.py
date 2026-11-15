@@ -21,6 +21,63 @@ SSH = ["ssh", "-o", "ClearAllForwardings=yes", "-o", "BatchMode=yes", "-o", "Con
        "-o", "ServerAliveCountMax=2", "brain_lab"]
 
 
+REPLACEABLE_NOTES = {
+    0: "repair8b_worker-0_2026-11-15T134451_604319_0000",
+    1: "repair8b_worker-1_2026-11-15T142925_197298_0000",
+}
+USER_OVERRIDE = {"date": "2026-11-15", "instruction": "i don't understand. I can't ask this. Just run them and thats all"}
+
+
+def superseded_gpu_slots(campaign: dict) -> int:
+    records = campaign.get("superseded_unreceived_gpu_intents", [])
+    assert len(records) <= 2 and len({row["worker"] for row in records}) == len(records)
+    assert all(gpu_intent(row) and row["worker"] in REPLACEABLE_NOTES
+               and row["note"] == REPLACEABLE_NOTES[row["worker"]] for row in records)
+    return sum(max(1, len(set(row.get("observed_job_ids", [])) |
+               ({row["job_id"]} if row.get("job_id") else set()))) for row in records)
+
+
+def replace_unreceived(campaign: dict, worker: int) -> dict:
+    """One user-authorized replacement for each of the two exact unanswered requests."""
+    assert worker in REPLACEABLE_NOTES, "Only original workers 0 and 1 may be replaced"
+    assert campaign.get("review_passed") and campaign.get("assets_ready_verified") and campaign.get("runtime_bundle_sha256"), "Reviewed ready bundle is required"
+    superseded_gpu_slots(campaign)
+    assert not any(row["worker"] == worker for row in campaign.get("superseded_unreceived_gpu_intents", [])), "Original request was already replaced once"
+    assert not any(row["worker"] == worker for row in campaign["jobs"]), "Worker already has a receipt"
+    matches = [row for row in campaign.get("ambiguous_submissions", []) if row.get("worker") == worker]
+    assert len(matches) == 1, "Exact original unanswered request is required"
+    original = matches[0]
+    assert gpu_intent(original) and original["note"] == REPLACEABLE_NOTES[worker]
+    assert not any(original.get(key) for key in ("job_id", "observed_job_ids", "recovery_conflict", "replacement_of")), "Observed or replacement requests cannot be resubmitted"
+    assert not any(row.get("recovery_conflict") for row in campaign.get("ambiguous_submissions", [])
+                   + campaign["jobs"] + campaign["auxiliary_jobs"] + campaign.get("superseded_unreceived_gpu_intents", [])), "Allocation conflict remains"
+    from cloud_repair_collect import validate_snapshot
+    snapshot_path = ARTIFACTS / "inspection-latest.json"
+    snapshot = json.loads(snapshot_path.read_text())
+    assert snapshot.get("collector_source_mode") == "inspect" and validate_snapshot(snapshot, "inspect"), "Fresh ready inspection is required"
+    records = [row for row in snapshot.get("tasks", []) if row.get("worker") == worker]
+    assert len(records) == 1 and records[0].get("task") == TASKS[worker] and records[0].get("phase") == "reserved", "Task is already claimed or not explicitly reserved"
+    assert not any(records[0].get(key) is not None for key in ("pid", "child_pid", "profile_pid", "training_pid", "wandb_id", "wandb_url")), "Task already has an owned process or run"
+    assert not any(row.get("worker") == worker for row in snapshot.get("workers", [])), "Worker already claimed its task"
+    guards = [row for row in snapshot.get("owned_guards", []) if row.get("worker") == worker]
+    assert len(guards) == 1 and guards[0].get("phase") == "reserved" and guards[0].get("status") == "inactive" and guards[0].get("child_pid") is None, "Task has no matching inactive guard proof"
+    assert reserved_gpu_slots(campaign) + 1 <= campaign["gpu_limit"] == 10, "Replacement exceeds ten reserved GPUs"
+    proof = ARTIFACTS / ("submission-worker-" + str(worker) + ".log")
+    assert proof.is_file() and not proof.is_symlink(), "Original submission evidence is missing"
+    archived = ARTIFACTS / ("submission-" + original["note"] + ".log")
+    if archived.exists():
+        assert not archived.is_symlink() and archived.read_bytes() == proof.read_bytes(), "Original evidence changed"
+    else:
+        archived.write_bytes(proof.read_bytes())
+    record = {**original, "superseded_at": now(), "user_override": USER_OVERRIDE,
+              "submission_evidence": str(archived), "submission_evidence_sha256": digest(archived),
+              "replacement_inspection_sha256": digest(snapshot_path), "original_still_reserves_gpu": True}
+    campaign.setdefault("superseded_unreceived_gpu_intents", []).append(record)
+    campaign["ambiguous_submissions"] = [row for row in campaign["ambiguous_submissions"] if row["note"] != original["note"]]
+    return {"replacement_of": original["note"], "user_override": USER_OVERRIDE,
+            "replacement_inspection_sha256": record["replacement_inspection_sha256"]}
+
+
 def safe_http_events(stderr: str) -> list:
     """Allow only structured HTTP request lines; discard headers, bodies and queries."""
     events = []
@@ -89,7 +146,7 @@ def reserved_gpu_slots(campaign: dict) -> int:
     ids = [row["job_id"] for row in campaign["jobs"]]
     assert len(ids) == len(set(ids)), "Duplicate received GPU job ID"
     assert len(records) <= len(TASKS), "Received jobs and unknown GPU intents exceed the eight tasks"
-    return sum(max(1, len(set(row.get("observed_job_ids", [])) | {row["job_id"]}))
+    return superseded_gpu_slots(campaign) + sum(max(1, len(set(row.get("observed_job_ids", [])) | {row["job_id"]}))
         for row in campaign["jobs"]) + sum(max(1, len(set(row.get("observed_job_ids", []))))
         for row in pending if gpu_intent(row))
 
@@ -246,7 +303,10 @@ def main(argv: list | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["preflight", "prepare", "worker", "inspect", "cleanup", "reconcile", "recover", "recover-auxiliary", "refresh-inspection"])
     parser.add_argument("--worker-id", type=int, choices=range(len(TASKS)))
+    parser.add_argument("--replace-unreceived", action="store_true")
     args = parser.parse_args(argv)
+    if args.replace_unreceived and args.mode != "worker":
+        parser.error("Unreceived replacement is only available for worker mode")
     if args.mode in {"recover", "recover-auxiliary"}:
         recover(args.mode == "recover-auxiliary")
         return
@@ -261,18 +321,20 @@ def main(argv: list | None = None) -> None:
         deferred = campaign.get("unresolved_auxiliary_submissions", [])
         if len(deferred) > 1 or any(not cpu_inspection(row) for row in deferred):
             raise RuntimeError("Unresolved allocation must be proven CPU-only before proceeding")
+        replacement = replace_unreceived(campaign, args.worker_id) if args.replace_unreceived else {}
         pending = campaign.get("ambiguous_submissions", [])
         reserved = reserved_gpu_slots(campaign)
         if pending and (args.mode not in {"worker", "inspect"} or any(not gpu_intent(row) for row in pending)):
             raise RuntimeError("Resolve CPU or state-changing pending submission before another create intent")
         if args.mode == "worker":
-            if any(row.get("recovery_conflict") for row in pending + campaign["jobs"] + campaign["auxiliary_jobs"]):
+            if any(row.get("recovery_conflict") for row in pending + campaign["jobs"] + campaign["auxiliary_jobs"] + campaign.get("superseded_unreceived_gpu_intents", [])):
                 raise RuntimeError("Resolve observed pending allocation conflicts before another GPU create intent")
             assert campaign.get("review_passed") and campaign.get("assets_ready_verified")
             assert campaign.get("runtime_bundle_sha256")
             assert not any(row["worker"] == args.worker_id for row in campaign["jobs"])
             assert not any(row["worker"] == args.worker_id for row in pending if gpu_intent(row))
-            assert reserved < len(TASKS) <= campaign["gpu_limit"] == 10
+            assert len(campaign["jobs"]) + sum(gpu_intent(row) for row in pending) < len(TASKS)
+            assert reserved < campaign["gpu_limit"] == 10
         if args.mode == "prepare":
             assert campaign.get("space_preflight_verified") is True
             assert campaign.get("preparation_guard_review_passed") is True
@@ -295,6 +357,7 @@ def main(argv: list | None = None) -> None:
         if args.mode == "worker":
             environment["PAPER8B_REPAIR_BUNDLE_SHA256"] = campaign["runtime_bundle_sha256"]
         if args.mode in {"cleanup", "reconcile"}:
+            assert not campaign.get("superseded_unreceived_gpu_intents"), "Superseded unanswered GPU requests require final audit"
             assert not any(row.get("recovery_conflict") for row in campaign["jobs"] + campaign["auxiliary_jobs"]), "Received allocation conflict remains"
             assert not campaign.get("unresolved_auxiliary_submissions"), "Deferred CPU inspection must be audited before cleanup"
             confirmation = json.loads((ARTIFACTS / "cleanup-authorization.json").read_text())
@@ -314,7 +377,8 @@ def main(argv: list | None = None) -> None:
             command.extend(["--env", key + "=" + value])
         pending = {"intent": intent, "note": note, "mode": args.mode, "worker": args.worker_id,
                    "created_at": now(), "source_revision": campaign["source_revision"],
-                   "environment_names": sorted(environment), "gpus": 1 if args.mode == "worker" else 0}
+                   "environment_names": sorted(environment), "gpus": 1 if args.mode == "worker" else 0,
+                   **replacement}
         campaign.setdefault("ambiguous_submissions", []).append(pending)
         campaign["reserved_gpu_slots"] = reserved_gpu_slots(campaign)
         save(ARTIFACTS / "campaign.json", campaign)
@@ -345,7 +409,7 @@ def main(argv: list | None = None) -> None:
         transport_partial = True
     for secret in secrets:
         output = output.replace(secret, "<redacted>")
-    proof = ARTIFACTS / ("submission-" + intent + ".log")
+    proof = ARTIFACTS / ("submission-" + (note if replacement else intent) + ".log")
     proof.write_text(output)
     record = merge_submission(note, output, proof, returncode, transport_partial)
     print(json.dumps(record, indent=2))

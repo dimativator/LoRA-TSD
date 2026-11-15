@@ -286,3 +286,10 @@ def test_received_late_allocation_conflict_blocks_final_cleanup_authority(comple
     with pytest.raises(ValueError,match='Received allocation conflict'):
         final.finalize(*complete)
     assert not (complete[0]/'cleanup-authorization.json').exists()
+
+
+def test_superseded_unreceived_gpu_reservations_block_final_cleanup_authority(complete):
+    modify(complete,'campaign.json',lambda value:value.update(superseded_unreceived_gpu_intents=[{'worker':0,'note':'original-unreceived'}]))
+    with pytest.raises(ValueError,match='Superseded unanswered'):
+        final.finalize(*complete)
+    assert not (complete[0]/'cleanup-authorization.json').exists()

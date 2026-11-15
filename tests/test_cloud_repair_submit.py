@@ -598,3 +598,99 @@ def test_received_conflict_blocks_cleanup_before_network(ledger, monkeypatch):
     monkeypatch.setattr(submit.subprocess,'run',lambda *a,**k:pytest.fail('Conflict permitted cleanup'))
     with pytest.raises(AssertionError,match='Received allocation conflict'):
         submit.main(['cleanup'])
+
+
+def replacement_ready(root,value,worker=0):
+    from cloud_repair_common import affected_paths
+    ready(value)
+    original={**gpu_pending(worker),'note':submit.REPLACEABLE_NOTES[worker],'created_at':'original-time'}
+    value['ambiguous_submissions']=[original]
+    submit.save(root/'campaign.json',value)
+    (root/f'submission-worker-{worker}.log').write_text('original timeout evidence')
+    snapshot={'campaign':submit.CAMPAIGN,'timestamp':submit.now(),'collector_source_mode':'inspect',
+        'filesystems':[{'requested_path':str(path),'available_bytes':6_000_000_000,'status':'ok'} for path in affected_paths()],
+        'assets_ready':True,'preparation':{'phase':'ready'},'workers':[],
+        'tasks':[{'worker':worker,'task':submit.TASKS[worker],'phase':'reserved'}],
+        'owned_guards':[{'worker':worker,'phase':'reserved','status':'inactive','child_pid':None}]}
+    submit.save(root/'inspection-latest.json',snapshot)
+    return original,snapshot
+
+
+@pytest.mark.parametrize('worker',[0,1])
+def test_exact_authorized_unreceived_replacement_preserves_original_and_charges_both(ledger,monkeypatch,worker):
+    root,value=ledger
+    original,_=replacement_ready(root,value,worker)
+    mock_create(monkeypatch,root,'worker',worker)
+    submit.main(['worker','--worker-id',str(worker),'--replace-unreceived'])
+    current=json.loads((root/'campaign.json').read_text())
+    assert current['reserved_gpu_slots']==2 and not current['ambiguous_submissions']
+    archived=current['superseded_unreceived_gpu_intents'][0]
+    assert all(archived[k]==v for k,v in original.items())
+    assert archived['original_still_reserves_gpu'] and Path(archived['submission_evidence']).read_text()=='original timeout evidence'
+    assert submit.digest(Path(archived['submission_evidence']))==archived['submission_evidence_sha256']
+    assert (root/f'submission-worker-{worker}.log').read_text()=='original timeout evidence'
+    assert current['jobs'][0]['replacement_of']==original['note']
+    assert current['jobs'][0]['user_override']['date']=='2026-11-15'
+    monkeypatch.setattr(submit.subprocess,'run',lambda *a,**k:pytest.fail('Second replacement attempted'))
+    with pytest.raises(AssertionError,match='already replaced once'):
+        submit.main(['worker','--worker-id',str(worker),'--replace-unreceived'])
+
+
+@pytest.mark.parametrize('damage',['otherworker','wrongnote','observed','conflict','replacement','stale','claimed','child','wandb','workerrecord','lowspace','missingguard','notready'])
+def test_unreceived_replacement_rejects_scope_or_fresh_state_damage_before_network(ledger,monkeypatch,damage):
+    from datetime import datetime,timedelta,timezone
+    root,value=ledger
+    _,snapshot=replacement_ready(root,value)
+    if damage=='wrongnote':value['ambiguous_submissions'][0]['note']='another worker0 note'
+    if damage=='observed':value['ambiguous_submissions'][0]['observed_job_ids']=[JOB]
+    if damage=='conflict':value['ambiguous_submissions'][0]['recovery_conflict']={'reason':'known'}
+    if damage=='replacement':value['ambiguous_submissions'][0]['replacement_of']='previous'
+    if damage=='stale':snapshot['timestamp']=(datetime.now(timezone.utc)-timedelta(seconds=301)).isoformat()
+    if damage=='claimed':snapshot['tasks'][0]['phase']='claimed'
+    if damage=='child':snapshot['tasks'][0]['child_pid']=123
+    if damage=='wandb':snapshot['tasks'][0]['wandb_id']='already-started'
+    if damage=='workerrecord':snapshot['workers']=[{'worker':0,'pid':123}]
+    if damage=='lowspace':snapshot['filesystems'][0]['available_bytes']=5_000_000_000
+    if damage=='missingguard':snapshot['owned_guards']=[]
+    if damage=='notready':value['assets_ready_verified']=False
+    submit.save(root/'campaign.json',value)
+    submit.save(root/'inspection-latest.json',snapshot)
+    monkeypatch.setattr(submit.subprocess,'run',lambda *a,**k:pytest.fail('Unsafe replacement reached network'))
+    with pytest.raises((AssertionError,ValueError)):
+        submit.main(['worker','--worker-id','2' if damage=='otherworker' else '0','--replace-unreceived'])
+    current=json.loads((root/'campaign.json').read_text())
+    assert not current.get('superseded_unreceived_gpu_intents') and current['ambiguous_submissions']==value['ambiguous_submissions']
+
+
+def test_two_replacements_keep_ten_slot_budget_and_block_early_cleanup(ledger,monkeypatch):
+    root,value=ledger
+    original,snapshot=replacement_ready(root,value)
+    value['jobs']=[{**gpu_pending(worker),'job_id':f'lm-mpi-job-{worker:08x}-1234-1234-1234-123456789abc'} for worker in range(2,8)]
+    other={**gpu_pending(1),'note':submit.REPLACEABLE_NOTES[1]}
+    value['ambiguous_submissions'].append(other)
+    (root/'submission-worker-1.log').write_text('second original timeout')
+    snapshot['tasks'].append({'worker':1,'task':submit.TASKS[1],'phase':'reserved'})
+    snapshot['owned_guards'].append({'worker':1,'phase':'reserved','status':'inactive','child_pid':None})
+    submit.save(root/'campaign.json',value);submit.save(root/'inspection-latest.json',snapshot)
+    mock_create(monkeypatch,root,'worker',0,job=JOB)
+    submit.main(['worker','--worker-id','0','--replace-unreceived'])
+    mock_create(monkeypatch,root,'worker',1,job=SECOND)
+    submit.main(['worker','--worker-id','1','--replace-unreceived'])
+    current=json.loads((root/'campaign.json').read_text())
+    assert current['reserved_gpu_slots']==10 and len(current['jobs'])==8
+    assert len(current['superseded_unreceived_gpu_intents'])==2
+    monkeypatch.setattr(submit.subprocess,'run',lambda *a,**k:pytest.fail('Early cleanup attempted'))
+    with pytest.raises(AssertionError,match='Superseded unanswered'):
+        submit.main(['cleanup'])
+
+
+def test_known_extra_allocation_blocks_replacement_at_cap(ledger,monkeypatch):
+    root,value=ledger
+    replacement_ready(root,value)
+    value['jobs']=[{**gpu_pending(worker),'job_id':f'lm-mpi-job-{worker:08x}-1234-1234-1234-123456789abc',
+        'observed_job_ids':[f'lm-mpi-job-{worker:08x}-1234-1234-1234-123456789abc', JOB,SECOND]} for worker in range(2,6)]
+    submit.save(root/'campaign.json',value)
+    monkeypatch.setattr(submit.subprocess,'run',lambda *a,**k:pytest.fail('Over-cap replacement attempted'))
+    with pytest.raises(AssertionError,match='exceeds ten'):
+        submit.main(['worker','--worker-id','0','--replace-unreceived'])
+    assert not json.loads((root/'campaign.json').read_text()).get('superseded_unreceived_gpu_intents')
