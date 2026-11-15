@@ -205,3 +205,39 @@ def test_remote_upload_module_import_does_not_need_local_monitor_hardening(monke
     specification.loader.exec_module(module)
     assert callable(module.upload_snapshot) and callable(module.upload_child)
     assert module.SHA256.fullmatch("a" * 64)
+
+
+@pytest.mark.parametrize("guard_raises", [False, True])
+def test_failed_owned_upload_exports_bounded_sanitized_trace_before_temp_cleanup(fallback, monkeypatch, capsys, guard_raises):
+    from contextlib import contextmanager
+    import cloud_repair_runtime as runtime
+    key, token = "wandb-private-credential-123456", "hf-private-credential-654321"
+    monkeypatch.setenv("WANDB_API_KEY", key)
+    monkeypatch.setenv("HF_TOKEN", token)
+    monkeypatch.setenv("REPAIR_CONTROL_NOTE", fallback.auxiliary["note"])
+    monkeypatch.setattr(control, "require_space", lambda *args: [])
+    directories = []
+    @contextmanager
+    def owned(command, directory, env):
+        directories.append(directory)
+        (directory / "process.log").write_text("old log line\n" * 3000
+            + "Traceback: SDKUploadError " + key + " " + token + "\n")
+        yield SimpleNamespace(wait=lambda: None, returncode=1)
+        if guard_raises:
+            raise OSError("owned guard failed")
+    monkeypatch.setattr(runtime, "owned_process", owned)
+    with pytest.raises((ValueError, OSError)):
+        control.upload_snapshot(fallback.snapshot)
+    output = capsys.readouterr().out
+    assert "Traceback: SDKUploadError" in output and "<redacted>" in output
+    assert key not in output and token not in output
+    tail = output.split("REPAIR_CONTROL_UPLOAD_FAILURE_LOG_TAIL_BEGIN\n", 1)[1].split(
+        "\nREPAIR_CONTROL_UPLOAD_FAILURE_LOG_TAIL_END", 1)[0]
+    assert len(tail.encode()) <= control.FAILURE_LOG_BYTES
+    assert all(not path.exists() for path in directories)
+
+
+def test_failure_log_tail_remains_bounded_for_invalid_utf8(tmp_path):
+    path = tmp_path / "process.log"
+    path.write_bytes(b"\xff" * (control.FAILURE_LOG_BYTES * 2))
+    assert len(control.failure_log_tail(path).encode()) <= control.FAILURE_LOG_BYTES

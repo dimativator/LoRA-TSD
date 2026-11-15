@@ -25,6 +25,7 @@ from cloud_repair_submit import ARTIFACTS
 
 GROUP = CAMPAIGN + "-control"
 MAX_BYTES = 16_000_000
+FAILURE_LOG_BYTES = 12_288
 SHA256 = re.compile(r"^[a-f0-9]{64}$")
 
 
@@ -51,6 +52,27 @@ def note_valid(note: str) -> bool:
     return isinstance(note, str) and note.startswith("repair8b_inspect-") and bool(re.fullmatch(r"[A-Za-z0-9_.-]{1,240}", note))
 
 
+def failure_log_tail(path: Path) -> str:
+    """Bounded diagnostics with real credentials removed before stdout export."""
+    secrets = sorted({os.environ[name].encode() for name in ("WANDB_API_KEY", "HF_TOKEN")
+                      if os.environ.get(name)}, key=len, reverse=True)
+    padding = max((len(value) for value in secrets), default=0)
+    require(not path.is_symlink(), "Owned control failure log is a link")
+    with path.open("rb") as stream:
+        stream.seek(0, 2)
+        start = max(0, stream.tell() - FAILURE_LOG_BYTES - padding)
+        stream.seek(start)
+        data = stream.read(FAILURE_LOG_BYTES + padding)
+    for value in secrets:
+        data = data.replace(value, b"<redacted>")
+    # If the read started inside a credential, its partial prefix cannot be
+    # matched above. Discard the entire boundary padding after redaction.
+    if start:
+        data = data[padding:]
+    decoded = data[-FAILURE_LOG_BYTES:].decode(errors="replace")
+    return decoded.encode()[-FAILURE_LOG_BYTES:].decode(errors="ignore")
+
+
 def upload_snapshot(snapshot: dict) -> None:
     """Called by the CPU inspector after printing its existing CRC snapshot."""
     note = os.environ.get("REPAIR_CONTROL_NOTE", "")
@@ -63,9 +85,20 @@ def upload_snapshot(snapshot: dict) -> None:
         path = directory / "source-snapshot.json"
         path.write_bytes(data)
         command = [str(PYTHON), str(Path(__file__).resolve()), "upload-child", "--snapshot", str(path)]
-        with owned_process(command, directory, os.environ.copy()) as process:
-            process.wait()
-        require(process.returncode == 0, "Owned control upload failed; preserve its exact job/note and do not resubmit")
+        succeeded = False
+        try:
+            with owned_process(command, directory, os.environ.copy()) as process:
+                process.wait()
+            require(process.returncode == 0, "Owned control upload failed; preserve its exact job/note and do not resubmit")
+            succeeded = True
+        finally:
+            if not succeeded:
+                try:
+                    tail = failure_log_tail(directory / "process.log")
+                    print("REPAIR_CONTROL_UPLOAD_FAILURE_LOG_TAIL_BEGIN\n" + tail
+                          + "\nREPAIR_CONTROL_UPLOAD_FAILURE_LOG_TAIL_END", flush=True)
+                except (OSError, ValueError) as error:
+                    print("REPAIR_CONTROL_UPLOAD_FAILURE_LOG_UNAVAILABLE " + type(error).__name__, flush=True)
 
 
 @contextmanager
