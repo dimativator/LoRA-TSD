@@ -17,11 +17,53 @@ SSH = ["ssh", "-o", "ClearAllForwardings=yes", "-o", "BatchMode=yes", "-o", "Con
        "-o", "ServerAliveCountMax=2", "brain_lab"]
 
 
+def recover() -> None:
+    with locked(ARTIFACTS / "submission.lock"):
+        campaign = json.loads((ARTIFACTS / "campaign.json").read_text())
+        pending = campaign.get("ambiguous_submissions", [])
+        if not pending:
+            print("No ambiguous repair submission")
+            return
+        assert len(pending) == 1
+        intent = pending[0]
+        remote = "import subprocess,os,signal,json\n"
+        remote += "p=subprocess.Popen(['mlsub','list'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)\n"
+        remote += "try:\n out,err=p.communicate(timeout=30)\n print(json.dumps({'returncode':p.returncode,'stdout':out}))\n"
+        remote += "except subprocess.TimeoutExpired:\n os.killpg(p.pid,signal.SIGKILL)\n print(json.dumps({'timeout':True}))\n"
+        response = subprocess.run(SSH + ["python3", "-"], input=remote,
+                                  capture_output=True, text=True, timeout=55)
+        assert response.returncode == 0
+        payload = json.loads(response.stdout)
+        if payload.get("timeout") or payload.get("returncode") != 0:
+            raise RuntimeError("Scheduler unavailable; keep the pending intent and do not resubmit")
+        text = payload["stdout"]
+        save_path = ARTIFACTS / ("recovery-" + intent["intent"] + ".log")
+        save_path.write_text(text)
+        matches = [line for line in text.splitlines()
+                   if "|note:" in line and line.split("|note:", 1)[1].strip() == intent["note"]]
+        if len(matches) != 1:
+            raise RuntimeError("No unique scheduler match yet; keep intent pending")
+        fields = matches[0].split(None, 2)
+        assert re.fullmatch(r"lm-mpi-job-[a-f0-9-]+", fields[0])
+        assert "repo:dimativator/LoRA-TSD|entry:scripts/cloud/cloud_repair_entry.py|" in fields[2]
+        record = {**intent, "job_id": fields[0], "scheduler_status": fields[1],
+                  "adopted_at": now(), "unique_note_evidence": str(save_path)}
+        collection = "jobs" if intent["mode"] == "worker" else "auxiliary_jobs"
+        assert not any(row["job_id"] == record["job_id"] for row in campaign[collection])
+        campaign[collection].append(record)
+        campaign["ambiguous_submissions"] = []
+        save(ARTIFACTS / "campaign.json", campaign)
+        print(json.dumps(record, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["preflight", "prepare", "worker", "inspect", "cleanup"])
+    parser.add_argument("mode", choices=["preflight", "prepare", "worker", "inspect", "cleanup", "reconcile", "recover"])
     parser.add_argument("--worker-id", type=int, choices=range(len(TASKS)))
     args = parser.parse_args()
+    if args.mode == "recover":
+        recover()
+        return
     if args.mode == "worker" and args.worker_id is None:
         parser.error("Worker mode requires --worker-id")
     with locked(ARTIFACTS / "submission.lock"):
@@ -37,6 +79,7 @@ def main() -> None:
             assert campaign.get("space_preflight_verified") is True
             assert campaign.get("preparation_guard_review_passed") is True
         environment = {"PYTHONDONTWRITEBYTECODE": "1", "CUDA_DEVICE_ORDER": "PCI_BUS_ID",
+                       "TMPDIR": "/tmp", "TEMP": "/tmp", "TMP": "/tmp",
                        "WANDB_BASE_URL": "https://wandb-radfan.ru", "WANDB_ENTITY": "andrey",
                        "WANDB_PROJECT": "LoRA-Muon"}
         secrets = []
@@ -53,7 +96,7 @@ def main() -> None:
             secrets.append(match.group(1))
         if args.mode == "worker":
             environment["PAPER8B_REPAIR_BUNDLE_SHA256"] = campaign["runtime_bundle_sha256"]
-        if args.mode == "cleanup":
+        if args.mode in {"cleanup", "reconcile"}:
             confirmation = json.loads((ARTIFACTS / "cleanup-authorization.json").read_text())
             assert confirmation["verified_runs"] == len(TASKS)
             environment.update(encode_audit_environment("REPAIR_FINAL_AUDIT", confirmation))

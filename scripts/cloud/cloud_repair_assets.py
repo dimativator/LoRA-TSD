@@ -135,26 +135,6 @@ def prepare_guarded() -> None:
 
 
 def cleanup(confirmation: dict) -> dict:
-    canonical_paths()
-    assert confirmation["campaign"] == CAMPAIGN and confirmation["verified_runs"] == len(TASKS)
-    assert confirmation["all_owned_jobs_terminal"] is True
-    assert confirmation["all_diagnostics_independently_verified"] is True
-    assert confirmation["exports_verified"] is True
-    assert not ASSETS.is_symlink() and ASSETS.parent.name == "dimativator-paper8b-pro-rite-repair-20261115"
-    assert json.loads((ASSETS / "ownership.json").read_text()) == {
-        "campaign": CAMPAIGN, "root": str(ASSETS.resolve())}
-    for task in TASKS:
-        assert json.loads((STATE / "tasks" / (task_key(task) + ".json")).read_text())["phase"] == "complete"
-    workers = list((STATE / "workers").glob("*.json"))
-    assert len(workers) == len(TASKS)
-    assert all(json.loads(path.read_text())["phase"] == "complete" for path in workers)
-    assert not list((STATE / "pending-wandb-sync").glob("*"))
-    before = require_space(affected_paths())
-    size = sum(path.stat().st_size for path in ASSETS.rglob("*")
-               if path.is_file() and not path.is_symlink())
-    shutil.rmtree(ASSETS)
-    assert not ASSETS.exists()
-    result = {"completed_at": now(), "root": str(ASSETS), "removed_bytes": size,
-              "before": before, "after": require_space(affected_paths()), "confirmation": confirmation}
-    save(STATE / "cleanup.json", result)
-    return result
+    """Compatibility entry keeps every caller behind the strict final audit."""
+    from cloud_repair_cleanup import cleanup as strict_cleanup
+    return strict_cleanup(confirmation)

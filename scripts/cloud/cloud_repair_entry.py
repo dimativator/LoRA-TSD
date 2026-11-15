@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 from cloud14_core import decode_audit_environment
 from cloud_repair_common import (ASSETS, CAMPAIGN, PYTHON, STATE, TASKS,
@@ -47,7 +48,7 @@ def inspect(preflight: bool = False) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["preflight", "prepare", "prepare-child", "worker", "profile", "inspect", "cleanup"])
+    parser.add_argument("mode", choices=["preflight", "prepare", "prepare-child", "worker", "profile", "inspect", "reconcile", "cleanup", "reconcile-child", "cleanup-child"])
     parser.add_argument("--worker-id", type=int, choices=range(len(TASKS)))
     parser.add_argument("--task", type=Path)
     parser.add_argument("--microbatch", type=int)
@@ -59,9 +60,20 @@ def main() -> None:
     elif args.mode in {"prepare", "prepare-child"}:
         from cloud_repair_assets import prepare, prepare_guarded
         prepare_guarded() if args.mode == "prepare" else prepare()
-    elif args.mode == "cleanup":
-        from cloud_repair_assets import cleanup
-        result = cleanup(decode_audit_environment("REPAIR_FINAL_AUDIT"))
+    elif args.mode in {"reconcile", "cleanup"}:
+        from cloud_repair_runtime import owned_process
+        with tempfile.TemporaryDirectory(prefix="repair-final-audit-") as temporary:
+            directory = Path(temporary)
+            command = [str(PYTHON), str(Path(__file__).resolve()), args.mode + "-child"]
+            with owned_process(command, directory, os.environ.copy()) as process:
+                process.wait()
+            print((directory / "process.log").read_text(), flush=True)
+            if process.returncode:
+                raise RuntimeError("Final audit failed; preserve all evidence and inspect logs")
+    elif args.mode in {"reconcile-child", "cleanup-child"}:
+        from cloud_repair_cleanup import cleanup, reconcile
+        action = reconcile if args.mode == "reconcile-child" else cleanup
+        result = action(decode_audit_environment("REPAIR_FINAL_AUDIT"))
         for line in snapshot_lines(result):
             print(line, flush=True)
     else:
